@@ -7,46 +7,62 @@ A self-contained, Docker-hosted AI agentic development system using the **Bismut
 ## Quick Start
 
 ### 1. Prerequisites
-- Docker + Docker Compose
-- Anthropic API key (get one at [console.anthropic.com](https://console.anthropic.com))
+- Docker + Portainer with Traefik running on the `proxy` network
+- Anthropic API key — get one at [console.anthropic.com](https://console.anthropic.com)
+- This repo pushed to GitHub
 - (Optional) GitHub OAuth app credentials for external repo sync
 
-### 2. Clone and start
+### 2. Add bismuth.localhost to your hosts file
 
+On the machine you'll browse from:
 ```bash
-git clone <this-repo>
-cd bismuth-system
-docker compose up -d
+echo "127.0.0.1 bismuth.localhost" | sudo tee -a /etc/hosts
 ```
 
-### 3. Open the UI
+### 3. Deploy via Portainer
 
-Navigate to **http://localhost** in your browser.
+1. In `docker-compose.yml`, replace both occurrences of `YOUR_GITHUB_USERNAME` with your actual GitHub username
+2. Commit and push to GitHub
+3. Portainer → **Stacks** → **Add stack** → **Git Repository**
+4. Set:
+   - **Repository URL:** `https://github.com/YOUR_USERNAME/bismuth`
+   - **Repository reference:** `refs/heads/main`
+   - **Compose path:** `docker-compose.yml`
+5. Click **Deploy the stack**
 
-On first run, you'll be prompted to enter your Anthropic API key and optional GitHub OAuth credentials. These are stored in `volumes/state/.env` and never committed to git.
+Portainer reads the compose file from git, then Docker builds `bismuth-ui` and `bismuth-agent` by pulling their respective subdirectories directly from GitHub — no local path resolution needed.
 
-### 4. Start a project
+### 4. Open the UI
+
+Navigate to **http://bismuth.localhost** — Traefik routes it automatically.
+
+On first run you'll be prompted for your Anthropic API key and optional GitHub credentials. These are stored in the `bismuth-state` volume and never committed to git.
+
+### 5. Start a project
 
 Choose to fill in the **web form** or **upload a YAML** file (see `volumes/state/project.example.yaml` for the schema).
+
+### 6. Updating Bismuth
+
+Portainer → Stacks → bismuth → **Pull and redeploy**. All volumes and data are preserved.
 
 ---
 
 ## Architecture
 
 ```
-http://localhost        → Web UI (roadmap + terminal)
-http://localhost/git    → Gitea (git browser)
-http://localhost:3001   → Gitea direct access
+http://bismuth.localhost        → Web UI (roadmap + terminal)
+http://bismuth.localhost/git    → Gitea (git browser)
+localhost:2222                  → Gitea SSH
 ```
 
 ### Services
 
-| Service   | Role                                      |
-|-----------|-------------------------------------------|
-| `nginx`   | Reverse proxy — single entry point        |
-| `web-ui`  | Next.js — roadmap, terminal, project setup|
-| `agent`   | Python — Claude agentic loop              |
-| `gitea`   | Local git server with web UI              |
+| Service          | Role                                       |
+|------------------|--------------------------------------------|
+| `bismuth-ui`     | Next.js — roadmap, terminal, project setup |
+| `bismuth-agent`  | Python — Claude agentic loop               |
+| `bismuth-gitea`  | Local git server with web UI               |
 
 ---
 
@@ -80,11 +96,14 @@ Every **N sprints** (configurable): iteration checkpoint comparing progress to r
 
 ## Volumes
 
-| Path                    | Contents                              |
-|-------------------------|---------------------------------------|
-| `volumes/workspace`     | Git repo — all project code           |
-| `volumes/state`         | `bismuth.json`, `BISMUTH.md`, `roadmap.json`, `.env` |
-| `volumes/logs`          | Agent logs                            |
+All data stored in named Docker volumes — persisted across Portainer redeployments and stack updates.
+
+| Volume              | Contents                                             |
+|---------------------|------------------------------------------------------|
+| `bismuth-workspace` | Git repo — all project code the agent writes         |
+| `bismuth-state`     | `bismuth.json`, `BISMUTH.md`, `roadmap.json`, `.env` |
+| `bismuth-logs`      | Agent logs                                           |
+| `bismuth-gitea`     | Gitea database + bare repos                          |
 
 ---
 
@@ -108,6 +127,6 @@ If the container restarts while a sprint is active, the agent will detect the in
 
 ## Security Notes
 
-- API keys are stored in `volumes/state/.env` — **never committed to git**
-- The `.gitignore` excludes `volumes/state/.env`
+- API keys are stored in the `bismuth-state` Docker volume — **never committed to git**
+- The `.gitignore` excludes all state files and secrets
 - Gitea runs locally — no code leaves your machine unless you configure an external repo

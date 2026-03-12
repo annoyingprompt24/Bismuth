@@ -1,5 +1,20 @@
 version: '3.9'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# BISMUTH — Recursive AI Development Pipeline
+#
+# Portainer git deployment:
+#   Repository: https://github.com/YOUR_USERNAME/bismuth
+#   Compose path: docker-compose.yml
+#
+# Replace YOUR_GITHUB_USERNAME below with your actual GitHub username.
+# All other configuration is handled via the UI at first run.
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-github-user: &github-user annoyingprompt24
+x-github-repo: &github-repo bismuth
+x-github-branch: &github-branch main
+
 services:
 
   # ─────────────────────────────────────────
@@ -7,7 +22,7 @@ services:
   # ─────────────────────────────────────────
   bismuth-ui:
     build:
-      context: ./web-ui
+      context: https://github.com/annoyingprompt24/Bismuth.git#main:web-ui
       dockerfile: Dockerfile
     container_name: bismuth-ui
     expose:
@@ -18,8 +33,8 @@ services:
       - NEXT_PUBLIC_AGENT_URL=http://bismuth.localhost/api/agent
       - GITEA_URL=http://bismuth-gitea:3000
     volumes:
-      - ./volumes/state:/app/state:ro
-      - ./volumes/logs:/app/logs:ro
+      - bismuth-state:/app/state:ro
+      - bismuth-logs:/app/logs:ro
     depends_on:
       - bismuth-agent
       - bismuth-gitea
@@ -32,9 +47,9 @@ services:
       - "traefik.http.routers.bismuth-ui.rule=Host(`bismuth.localhost`)"
       - "traefik.http.routers.bismuth-ui.entrypoints=web"
       - "traefik.http.services.bismuth-ui.loadbalancer.server.port=3000"
-      # WebSocket support for terminal
       - "traefik.http.middlewares.bismuth-ws.headers.customrequestheaders.Connection=Upgrade"
       - "traefik.http.middlewares.bismuth-ws.headers.customrequestheaders.Upgrade=websocket"
+      - "traefik.http.routers.bismuth-ui.middlewares=bismuth-ws"
     restart: unless-stopped
 
   # ─────────────────────────────────────────
@@ -42,7 +57,7 @@ services:
   # ─────────────────────────────────────────
   bismuth-agent:
     build:
-      context: ./agent
+      context: https://github.com/YOUR_GITHUB_USERNAME/bismuth.git#main:agent
       dockerfile: Dockerfile
     container_name: bismuth-agent
     expose:
@@ -53,11 +68,10 @@ services:
       - WORKSPACE_PATH=/workspace
       - STATE_PATH=/state
       - LOGS_PATH=/logs
-      # API keys injected at runtime via /state/.env — never hardcoded
     volumes:
-      - ./volumes/workspace:/workspace
-      - ./volumes/state:/state
-      - ./volumes/logs:/logs
+      - bismuth-workspace:/workspace
+      - bismuth-state:/state
+      - bismuth-logs:/logs
     depends_on:
       - bismuth-gitea
     networks:
@@ -82,7 +96,7 @@ services:
     expose:
       - "3000"
     ports:
-      - "2222:22"    # SSH — direct, no Traefik equivalent
+      - "2222:22"
     environment:
       - USER_UID=1000
       - USER_GID=1000
@@ -94,7 +108,7 @@ services:
       - GITEA__security__INSTALL_LOCK=false
       - GITEA__service__DISABLE_REGISTRATION=false
     volumes:
-      - gitea-data:/data
+      - bismuth-gitea:/data
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     networks:
@@ -114,7 +128,13 @@ services:
 # VOLUMES
 # ─────────────────────────────────────────
 volumes:
-  gitea-data:
+  bismuth-workspace:
+    driver: local
+  bismuth-state:
+    driver: local
+  bismuth-logs:
+    driver: local
+  bismuth-gitea:
     driver: local
 
 # ─────────────────────────────────────────
@@ -122,6 +142,6 @@ volumes:
 # ─────────────────────────────────────────
 networks:
   proxy:
-    external: true          # Your existing Traefik network — no conflict
+    external: true
   bismuth-internal:
-    driver: bridge          # Private inter-service network
+    driver: bridge
