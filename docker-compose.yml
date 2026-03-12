@@ -57,7 +57,7 @@ services:
   # ─────────────────────────────────────────
   bismuth-agent:
     build:
-      context: https://github.com/YOUR_GITHUB_USERNAME/bismuth.git#main:agent
+      context: https://github.com/annoyingprompt24/Bismuth.git#main:agent
       dockerfile: Dockerfile
     container_name: bismuth-agent
     expose:
