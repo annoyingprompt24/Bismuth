@@ -1,0 +1,127 @@
+version: '3.9'
+
+services:
+
+  # ─────────────────────────────────────────
+  # WEB UI — Next.js frontend
+  # ─────────────────────────────────────────
+  bismuth-ui:
+    build:
+      context: ./web-ui
+      dockerfile: Dockerfile
+    container_name: bismuth-ui
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - AGENT_API_URL=http://bismuth-agent:5000
+      - NEXT_PUBLIC_AGENT_URL=http://bismuth.localhost/api/agent
+      - GITEA_URL=http://bismuth-gitea:3000
+    volumes:
+      - ./volumes/state:/app/state:ro
+      - ./volumes/logs:/app/logs:ro
+    depends_on:
+      - bismuth-agent
+      - bismuth-gitea
+    networks:
+      - proxy
+      - bismuth-internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.bismuth-ui.rule=Host(`bismuth.localhost`)"
+      - "traefik.http.routers.bismuth-ui.entrypoints=web"
+      - "traefik.http.services.bismuth-ui.loadbalancer.server.port=3000"
+      # WebSocket support for terminal
+      - "traefik.http.middlewares.bismuth-ws.headers.customrequestheaders.Connection=Upgrade"
+      - "traefik.http.middlewares.bismuth-ws.headers.customrequestheaders.Upgrade=websocket"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # AGENT — Python Bismuth agentic loop
+  # ─────────────────────────────────────────
+  bismuth-agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: bismuth-agent
+    expose:
+      - "5000"
+    environment:
+      - GITEA_URL=http://bismuth-gitea:3000
+      - GITEA_USER=bismuth
+      - WORKSPACE_PATH=/workspace
+      - STATE_PATH=/state
+      - LOGS_PATH=/logs
+      # API keys injected at runtime via /state/.env — never hardcoded
+    volumes:
+      - ./volumes/workspace:/workspace
+      - ./volumes/state:/state
+      - ./volumes/logs:/logs
+    depends_on:
+      - bismuth-gitea
+    networks:
+      - proxy
+      - bismuth-internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.bismuth-agent.rule=Host(`bismuth.localhost`) && PathPrefix(`/api/agent`)"
+      - "traefik.http.routers.bismuth-agent.entrypoints=web"
+      - "traefik.http.services.bismuth-agent.loadbalancer.server.port=5000"
+      - "traefik.http.middlewares.bismuth-strip.stripprefix.prefixes=/api/agent"
+      - "traefik.http.routers.bismuth-agent.middlewares=bismuth-strip"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  # GITEA — Local git server + web UI
+  # ─────────────────────────────────────────
+  bismuth-gitea:
+    image: gitea/gitea:latest
+    container_name: bismuth-gitea
+    expose:
+      - "3000"
+    ports:
+      - "2222:22"    # SSH — direct, no Traefik equivalent
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__server__ROOT_URL=http://bismuth.localhost/git/
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__server__DOMAIN=bismuth.localhost
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__database__PATH=/data/gitea/gitea.db
+      - GITEA__security__INSTALL_LOCK=false
+      - GITEA__service__DISABLE_REGISTRATION=false
+    volumes:
+      - gitea-data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - proxy
+      - bismuth-internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.bismuth-gitea.rule=Host(`bismuth.localhost`) && PathPrefix(`/git`)"
+      - "traefik.http.routers.bismuth-gitea.entrypoints=web"
+      - "traefik.http.services.bismuth-gitea.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.bismuth-gitea-strip.stripprefix.prefixes=/git"
+      - "traefik.http.routers.bismuth-gitea.middlewares=bismuth-gitea-strip"
+    restart: unless-stopped
+
+# ─────────────────────────────────────────
+# VOLUMES
+# ─────────────────────────────────────────
+volumes:
+  gitea-data:
+    driver: local
+
+# ─────────────────────────────────────────
+# NETWORKS
+# ─────────────────────────────────────────
+networks:
+  proxy:
+    external: true          # Your existing Traefik network — no conflict
+  bismuth-internal:
+    driver: bridge          # Private inter-service network
