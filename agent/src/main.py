@@ -98,9 +98,15 @@ def get_state():
 
 @app.route("/project/export", methods=["GET"])
 def export_project():
-    import zipfile, io
+    import zipfile, io, subprocess
     state = read_state()
     project_name = (state.get("project") or "project").replace(" ", "-").lower()
+
+    # Ensure working tree reflects the latest commit before zipping
+    subprocess.run(
+        ["git", "-C", str(WORKSPACE), "checkout", "HEAD"],
+        capture_output=True,
+    )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

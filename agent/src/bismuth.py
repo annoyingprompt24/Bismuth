@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+import re
 import anthropic
 import git
 import eventlet.tpool
@@ -191,6 +192,14 @@ class BismuthAgent:
             except Exception:
                 pass  # tag didn't exist
             repo.create_tag(tag, message=summary)
+
+            # Ensure working tree reflects the committed state
+            try:
+                branch = repo.active_branch.name
+                repo.git.checkout(branch)
+                log.info(f"Checked out {branch} after sprint commit")
+            except Exception as ce:
+                log.warning(f"Post-commit checkout failed: {ce}")
 
             return sha
         except Exception as e:
@@ -440,6 +449,84 @@ Return JSON:
 
         return False
 
+    # ── File extraction ───────────────────────────────────────────────────────
+
+    def _write_workspace_file(self, filename: str, content: str):
+        """Write content to a file under WORKSPACE, creating parent dirs. Rejects unsafe paths."""
+        safe = Path(filename)
+        if safe.is_absolute() or ".." in safe.parts:
+            log.warning(f"Skipping unsafe file path: {filename}")
+            return
+        target = self.workspace / safe
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        log.info(f"Wrote file: {filename} ({len(content)} bytes)")
+        self.emit_log(f"📄 Wrote: {filename} ({len(content)} bytes)")
+
+    def _extract_files_from_response(self, text: str) -> list:
+        """
+        Parse Claude's response for file blocks and write them to WORKSPACE_PATH.
+
+        Supported formats:
+
+          ### FILE: path/to/file.ext
+          ```<optional lang>
+          <content>
+          ```
+
+          ```lang (filename: path/to/file.ext)
+          <content>
+          ```
+
+        Returns list of relative file paths written.
+        """
+        written = []
+
+        # ── Format 1: ### FILE: header ────────────────────────────────────────
+        # Strip out the summary block first so it doesn't bleed into file content
+        body = text.split("```summary")[0] if "```summary" in text else text
+
+        parts = re.split(r"^### FILE:\s*(.+)$", body, flags=re.MULTILINE)
+        # parts = [preamble, filename1, content1, filename2, content2, ...]
+        i = 1
+        while i + 1 <= len(parts) - 1:
+            filename = parts[i].strip()
+            raw_content = parts[i + 1]
+
+            # Strip leading/trailing whitespace
+            raw_content = raw_content.strip()
+
+            # If content is wrapped in a code fence, peel it off
+            if raw_content.startswith("```"):
+                lines = raw_content.split("\n")
+                lines = lines[1:]  # drop ``` opening line
+                # drop trailing ```
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                content = "\n".join(lines)
+            else:
+                content = raw_content
+
+            if filename and content.strip():
+                self._write_workspace_file(filename, content)
+                written.append(filename)
+
+            i += 2
+
+        # ── Format 2: ```lang (filename: path) ───────────────────────────────
+        fence_fn_re = re.compile(
+            r"```\w*\s+\(filename:\s*([^\)]+)\)\n(.*?)```",
+            re.DOTALL,
+        )
+        for match in fence_fn_re.finditer(text):
+            filename = match.group(1).strip()
+            content = match.group(2)
+            if filename not in written and content.strip():
+                self._write_workspace_file(filename, content)
+                written.append(filename)
+
+        return written
+
     def _run_sprint_work(self, sprint: dict, attempt: int) -> dict:
         """Ask Claude to execute the sprint work."""
         ralph_context = self.read_ralph_md()
@@ -468,15 +555,27 @@ PREVIOUS LEARNINGS & CONTEXT:
 You must:
 1. Execute ONLY the sprint objective — nothing more
 2. Flag scope creep immediately rather than proceeding
-3. End with a JSON summary block marked ```summary```
+3. Output every file using the FILE block format below
+4. End with a JSON summary block marked ```summary```
+
+FILE OUTPUT FORMAT — you MUST use this exact format for every file you create or modify:
+
+### FILE: path/to/filename.ext
+```<language>
+<complete file contents here>
+```
+
+Use this format for EVERY file. This is how your work gets written to disk.
+Without this format your changes will be lost and the sprint will fail.
 
 CRITICAL RULES:
 - You have no ability to run bash commands or a terminal
-- Do not write ```bash blocks — they will not be executed
-- Instead write the COMPLETE file contents directly in your response
+- Do NOT write ```bash blocks — they will not be executed
+- Write the COMPLETE file contents for every file — no truncation, no "..." placeholders
+- You MUST write at least one ### FILE: block — sprints that produce no files fail
 - You MUST end your response with a ```summary block — without it the sprint fails
 - The summary block must be valid JSON with keys: success, deliverable, learnings, scope_creep_detected, error
-- If you cannot complete the objective write success: false in the summary with a clear error message — do not omit the summary block
+- If you cannot complete the objective write success: false in the summary with a clear error message
 """
 
         prompt = f"""Execute this sprint:
@@ -487,7 +586,14 @@ Objective: {sprint['objective']}
 Acceptance Criteria: {json.dumps(sprint.get('acceptance_criteria', []))}
 {attempt_note}
 
-Work through the objective step by step, then end with:
+Work through the objective step by step. For each file you create or modify use:
+
+### FILE: path/to/file.ext
+```language
+<complete file contents>
+```
+
+Then end with:
 ```summary
 {{
   "success": true/false,
@@ -500,11 +606,18 @@ Work through the objective step by step, then end with:
 
         raw = self.chat(prompt, system=system)
 
+        # Extract and write files to workspace
+        files_written = self._extract_files_from_response(raw)
+        if files_written:
+            self.emit_log(f"📁 {len(files_written)} file(s) written: {', '.join(files_written)}")
+        else:
+            self.emit_log("⚠️ No files extracted from sprint response", level="warning")
+
         # Extract summary block
         if "```summary" in raw:
             summary_raw = raw.split("```summary")[1].split("```")[0].strip()
             try:
-                return json.loads(summary_raw)
+                result = json.loads(summary_raw)
             except json.JSONDecodeError as e:
                 log.error(f"_run_sprint_work summary JSON parse failed: {e}. Raw: {summary_raw[:500]}")
                 return {
@@ -512,6 +625,19 @@ Work through the objective step by step, then end with:
                     "error": "Summary block was not valid JSON",
                     "learnings": "Agent returned a summary block but it could not be parsed as JSON. Will retry.",
                 }
+
+            # A sprint that claims success but wrote nothing to disk has failed
+            if result.get("success") and not files_written:
+                return {
+                    "success": False,
+                    "error": "Sprint claimed success but no files were written to disk.",
+                    "learnings": (
+                        "Agent must output files using the ### FILE: format. "
+                        "No file blocks were detected in the response. Will retry with stricter instructions."
+                    ),
+                }
+
+            return result
 
         # If no summary block, treat as failure
         return {
