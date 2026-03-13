@@ -42,7 +42,7 @@ const FORM_TEMPLATE = {
   }
 }
 
-export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
+export default function ProjectSetupView({ agentUrl, onBack }: { agentUrl: string; onBack?: () => void }) {
   const [mode, setMode] = useState<'choose' | 'form' | 'upload'>('choose')
   const [form, setForm] = useState(FORM_TEMPLATE)
   const [uploadContent, setUploadContent] = useState('')
@@ -110,7 +110,7 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${agentUrl}/project/start`, {
+      const res = await fetch(`${agentUrl}/projects/new`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ yaml_content: content })
@@ -143,6 +143,11 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
   if (mode === 'choose') return (
     <div className="h-screen flex items-center justify-center bg-bismuth-bg">
       <div className="w-full max-w-lg text-center">
+        {onBack && (
+          <button onClick={onBack} className="absolute top-5 left-8 text-bismuth-dim hover:text-bismuth-text text-sm transition-colors">
+            ← Back
+          </button>
+        )}
         <div className="text-3xl font-mono font-light tracking-widest text-bismuth-accent mb-2">BISMUTH</div>
         <div className="text-bismuth-dim text-sm mb-10">New Project — How would you like to define requirements?</div>
 

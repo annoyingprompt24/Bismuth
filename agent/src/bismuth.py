@@ -844,6 +844,8 @@ For each DoD criterion, assess if it has been met. Return JSON:
             self.set_status("green", "complete")
             self.emit_message("complete", f"🎉 **Project Complete!**\n\n{assessment['summary']}")
             self._push_to_external()
+            project_name = self.read_project_yaml().get("project", {}).get("name", "project")
+            self._push_to_github(project_name)
         else:
             failed = [c for c in assessment["criteria"] if not c["met"]]
             self.set_status("red", "error")
@@ -853,6 +855,37 @@ For each DoD criterion, assess if it has been met. Return JSON:
                 "\n".join(f"- {c['criterion']}" for c in failed) +
                 f"\n\nHow would you like to proceed?"
             )
+
+    def _push_to_github(self, project_name: str):
+        """Push workspace to GitHub if token and username are configured."""
+        github_token    = os.getenv("GITHUB_TOKEN")
+        github_username = os.getenv("GITHUB_USERNAME")
+        github_org      = os.getenv("GITHUB_ORG")
+
+        if not github_token or not github_username:
+            self.emit_log("GitHub token/username not configured — skipping GitHub push")
+            return
+
+        owner      = github_org if github_org else github_username
+        repo_name  = project_name.lower().replace(" ", "-")
+        remote_url = f"https://{github_token}@github.com/{owner}/{repo_name}.git"
+        branch     = os.getenv("DEFAULT_BRANCH", "main")
+
+        try:
+            repo = self.get_repo()
+            if "origin" not in [r.name for r in repo.remotes]:
+                repo.create_remote("origin", remote_url)
+            else:
+                repo.remotes.origin.set_url(remote_url)
+
+            repo.remotes.origin.push(branch)
+            github_url = f"https://github.com/{owner}/{repo_name}"
+            self.emit_log(f"Pushed to GitHub: {github_url}")
+            self.emit_message("system", f"✓ Pushed to GitHub: {github_url}")
+        except Exception as e:
+            log.warning(f"GitHub push failed: {e}")
+            self.emit_log(f"⚠️ GitHub push failed: {e}", level="warning")
+            self.emit_message("flag", f"⚠️ GitHub push failed: {e}")
 
     def _push_to_external(self):
         external = os.getenv("EXTERNAL_REPO_URL")

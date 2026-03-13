@@ -116,11 +116,17 @@ export function useBismuthSocket() {
 
   const startProject = useCallback((yamlContent: string) => {
     if (!agentUrl) return Promise.reject('No agent URL')
-    return fetch(`${agentUrl}/project/start`, {
+    return fetch(`${agentUrl}/projects/new`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ yaml_content: yamlContent })
     }).then(r => r.json())
+  }, [agentUrl])
+
+  const loadProject = useCallback(async (projectId: string) => {
+    if (!agentUrl) return
+    await fetch(`${agentUrl}/projects/${projectId}/load`, { method: 'POST' })
+    // State update arrives via WebSocket state_update event
   }, [agentUrl])
 
   return {
@@ -137,5 +143,6 @@ export function useBismuthSocket() {
     acceptSprints,
     setupKeys,
     startProject,
+    loadProject,
   }
 }

@@ -21,7 +21,7 @@ const PHASE_LABELS: Record<string, string> = {
   error:                    'Error',
 }
 
-export default function StatusBar({ state, connected, agentUrl }: { state: AgentState | null, connected: boolean, agentUrl: string | null }) {
+export default function StatusBar({ state, connected, agentUrl, onGoToProjects }: { state: AgentState | null, connected: boolean, agentUrl: string | null, onGoToProjects?: () => void }) {
   const status = state?.status || 'grey'
   const config = STATUS_CONFIG[status]
 
@@ -29,6 +29,11 @@ export default function StatusBar({ state, connected, agentUrl }: { state: Agent
     <div className="h-12 flex items-center justify-between px-5 bg-bismuth-surface border-b border-bismuth-border flex-shrink-0">
       {/* Left — Logo + project */}
       <div className="flex items-center gap-4">
+        {onGoToProjects && (
+          <button onClick={onGoToProjects} className="text-bismuth-dim hover:text-bismuth-text text-xs transition-colors font-mono">
+            ←
+          </button>
+        )}
         <span className="text-bismuth-accent font-mono font-medium tracking-widest text-sm">BISMUTH</span>
         {state?.project && (
           <>

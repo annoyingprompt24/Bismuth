@@ -6,6 +6,8 @@ Flask API + SocketIO server for the agentic loop
 import os
 import json
 import logging
+import uuid
+import shutil
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
@@ -13,9 +15,10 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-STATE_PATH  = Path(os.getenv("STATE_PATH", "/state"))
-LOGS_PATH   = Path(os.getenv("LOGS_PATH", "/logs"))
-WORKSPACE   = Path(os.getenv("WORKSPACE_PATH", "/workspace"))
+STATE_PATH    = Path(os.getenv("STATE_PATH", "/state"))
+LOGS_PATH     = Path(os.getenv("LOGS_PATH", "/logs"))
+WORKSPACE     = Path(os.getenv("WORKSPACE_PATH", "/workspace"))
+PROJECTS_PATH = STATE_PATH / "projects"
 
 # Load runtime secrets from state/.env (set via UI at first-run)
 env_file = STATE_PATH / ".env"
@@ -74,6 +77,37 @@ def write_state(state: dict):
     state_file.write_text(json.dumps(state, indent=2))
     # Broadcast state change to all connected UI clients
     socketio.emit("state_update", state)
+    # Auto-snapshot to project directory so project list stays current
+    project_id = state.get("project_id")
+    if project_id:
+        proj_dir = PROJECTS_PATH / project_id
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        (proj_dir / "bismuth.json").write_text(json.dumps(state, indent=2))
+        roadmap_file = STATE_PATH / "roadmap.json"
+        if roadmap_file.exists():
+            (proj_dir / "roadmap.json").write_text(roadmap_file.read_text())
+        yaml_file = STATE_PATH / "project.yaml"
+        if yaml_file.exists():
+            (proj_dir / "project.yaml").write_text(yaml_file.read_text())
+
+# ── Settings helpers ──────────────────────────────────────────────────────────
+
+def _read_env_file() -> dict:
+    env_file = STATE_PATH / ".env"
+    if not env_file.exists():
+        return {}
+    result = {}
+    for line in env_file.read_text().splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
+
+def _write_env_file(env: dict):
+    lines = [f"{k}={v}" for k, v in env.items() if v]
+    STATE_PATH.mkdir(parents=True, exist_ok=True)
+    (STATE_PATH / ".env").write_text("\n".join(lines))
+    load_dotenv(STATE_PATH / ".env", override=True)
 
 # ── REST API ──────────────────────────────────────────────────────────────────
 
@@ -124,6 +158,202 @@ def export_project():
         as_attachment=True,
         download_name=f"{project_name}-bismuth-export.zip",
     )
+
+# ── Projects ──────────────────────────────────────────────────────────────────
+
+@app.route("/projects", methods=["GET"])
+def list_projects():
+    PROJECTS_PATH.mkdir(parents=True, exist_ok=True)
+    projects = []
+    for proj_dir in sorted(PROJECTS_PATH.iterdir()):
+        if not proj_dir.is_dir():
+            continue
+        state_file = proj_dir / "bismuth.json"
+        if not state_file.exists():
+            continue
+        try:
+            s = json.loads(state_file.read_text())
+        except Exception:
+            continue
+        total_sprints = 0
+        roadmap_file = proj_dir / "roadmap.json"
+        if roadmap_file.exists():
+            try:
+                rm = json.loads(roadmap_file.read_text())
+                total_sprints = rm.get("total_sprints", len(rm.get("sprints", [])))
+            except Exception:
+                pass
+        projects.append({
+            "id": proj_dir.name,
+            "name": s.get("project", proj_dir.name),
+            "status": s.get("status", "grey"),
+            "phase": s.get("phase", "setup"),
+            "current_sprint": s.get("current_sprint", 0),
+            "total_sprints": total_sprints,
+            "created_at": s.get("created_at"),
+            "completed_at": s.get("completed_at"),
+        })
+    # Newest first
+    projects.reverse()
+    return jsonify(projects)
+
+@app.route("/projects/new", methods=["POST"])
+def projects_new():
+    import yaml as _yaml
+    from bismuth import BismuthAgent
+    from datetime import datetime as _dt
+
+    data = request.json
+    if not data.get("yaml_content"):
+        return jsonify({"error": "No YAML content provided"}), 400
+
+    try:
+        project_config = _yaml.safe_load(data["yaml_content"])
+    except _yaml.YAMLError as e:
+        return jsonify({"error": f"Invalid YAML: {e}"}), 400
+
+    project_name = project_config.get("project", {}).get("name", "Project")
+    project_id   = uuid.uuid4().hex[:8]
+
+    # Create project directory and save YAML
+    proj_dir = PROJECTS_PATH / project_id
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "project.yaml").write_text(data["yaml_content"])
+
+    # Write to active state path too
+    STATE_PATH.mkdir(parents=True, exist_ok=True)
+    (STATE_PATH / "project.yaml").write_text(data["yaml_content"])
+
+    # Clear workspace for fresh project
+    if WORKSPACE.exists():
+        shutil.rmtree(WORKSPACE)
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+    # Set fresh active state
+    state = {
+        "initialised": True,
+        "project": project_name,
+        "project_id": project_id,
+        "phase": "planning",
+        "current_sprint": 0,
+        "current_iteration": 0,
+        "yellow_cards": 0,
+        "status": "green",
+        "awaiting_input": False,
+        "input_prompt": None,
+        "created_at": _dt.utcnow().isoformat(),
+        "completed_at": None,
+    }
+    write_state(state)
+
+    socketio.start_background_task(
+        BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH).generate_roadmap,
+        project_config,
+    )
+    return jsonify({"success": True, "project_id": project_id})
+
+@app.route("/projects/<project_id>/load", methods=["POST"])
+def projects_load(project_id):
+    proj_dir = PROJECTS_PATH / project_id
+    if not proj_dir.exists():
+        return jsonify({"error": "Project not found"}), 404
+
+    state_file = proj_dir / "bismuth.json"
+    if state_file.exists():
+        state = json.loads(state_file.read_text())
+        write_state(state)
+
+    roadmap_file = proj_dir / "roadmap.json"
+    if roadmap_file.exists():
+        content = roadmap_file.read_text()
+        (STATE_PATH / "roadmap.json").write_text(content)
+        socketio.emit("roadmap_update", json.loads(content))
+
+    yaml_file = proj_dir / "project.yaml"
+    if yaml_file.exists():
+        (STATE_PATH / "project.yaml").write_text(yaml_file.read_text())
+
+    log.info(f"Loaded project {project_id}")
+    return jsonify({"success": True})
+
+@app.route("/projects/<project_id>/export", methods=["GET"])
+def projects_export(project_id):
+    import zipfile, io, subprocess
+    proj_dir = PROJECTS_PATH / project_id
+    if not proj_dir.exists():
+        return jsonify({"error": "Project not found"}), 404
+
+    project_name = "project"
+    state_file = proj_dir / "bismuth.json"
+    if state_file.exists():
+        try:
+            s = json.loads(state_file.read_text())
+            project_name = (s.get("project") or "project").replace(" ", "-").lower()
+        except Exception:
+            pass
+
+    subprocess.run(["git", "-C", str(WORKSPACE), "checkout", "HEAD"], capture_output=True)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(WORKSPACE):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for file in files:
+                full_path = os.path.join(root, file)
+                arcname = os.path.relpath(full_path, WORKSPACE)
+                zf.write(full_path, arcname)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project_name}-bismuth-export.zip",
+    )
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+@app.route("/settings", methods=["GET"])
+def get_settings():
+    env = _read_env_file()
+    return jsonify({
+        "anthropic_api_key_set": bool(env.get("ANTHROPIC_API_KEY")),
+        "github_token_set": bool(env.get("GITHUB_TOKEN")),
+        "github_username": env.get("GITHUB_USERNAME", ""),
+        "github_org": env.get("GITHUB_ORG", ""),
+        "default_branch": env.get("DEFAULT_BRANCH", "main"),
+        "sprints_per_iteration": int(env.get("SPRINTS_PER_ITERATION", 5)),
+        "max_yellow_cards": int(env.get("MAX_YELLOW_CARDS", 2)),
+    })
+
+@app.route("/settings", methods=["POST"])
+def save_settings():
+    data = request.json
+    env = _read_env_file()
+
+    if data.get("anthropic_api_key"):
+        env["ANTHROPIC_API_KEY"] = data["anthropic_api_key"]
+    if data.get("github_token"):
+        env["GITHUB_TOKEN"] = data["github_token"]
+    for key, env_key in [
+        ("github_username",      "GITHUB_USERNAME"),
+        ("github_org",           "GITHUB_ORG"),
+        ("default_branch",       "DEFAULT_BRANCH"),
+    ]:
+        if key in data:
+            env[env_key] = data[key]
+    if "sprints_per_iteration" in data:
+        env["SPRINTS_PER_ITERATION"] = str(data["sprints_per_iteration"])
+    if "max_yellow_cards" in data:
+        env["MAX_YELLOW_CARDS"] = str(data["max_yellow_cards"])
+
+    _write_env_file(env)
+
+    state = read_state()
+    state["initialised"] = True
+    write_state(state)
+
+    log.info("Settings updated")
+    return jsonify({"success": True})
 
 @app.route("/roadmap", methods=["GET"])
 def get_roadmap():

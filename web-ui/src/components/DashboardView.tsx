@@ -5,13 +5,13 @@ import StatusBar from './StatusBar'
 import RoadmapTimeline from './RoadmapTimeline'
 import Terminal from './Terminal'
 
-export default function DashboardView() {
+export default function DashboardView({ onGoToProjects }: { onGoToProjects?: () => void }) {
   const socket = useBismuthSocket()
 
   return (
     <div className="h-screen flex flex-col bg-bismuth-bg overflow-hidden">
       {/* Top status bar */}
-      <StatusBar state={socket.state} connected={socket.connected} agentUrl={socket.agentUrl} />
+      <StatusBar state={socket.state} connected={socket.connected} agentUrl={socket.agentUrl} onGoToProjects={onGoToProjects} />
 
       {/* Main split layout */}
       <div className="flex flex-1 overflow-hidden">
