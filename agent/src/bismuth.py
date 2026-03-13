@@ -383,7 +383,9 @@ Return JSON:
                     if yellow_cards >= 2:
                         self._update_sprint_status(sprint_id, "red")
                         self.set_status("red")
-                        review_msg = f"🔴 **Human Review Required** — Sprint {sprint_id} has failed twice.\n\n**Issue:** {result.get('error')}\n\n**Learnings so far:** {result.get('learnings', 'None')}\n\nPlease provide direction to continue."
+                        learnings = result.get('learnings', 'None')
+                        learnings = (learnings[:200] + "...") if len(learnings) > 200 else learnings
+                        review_msg = f"🔴 **Human Review Required** — Sprint {sprint_id} has failed twice.\n\n**Issue:** {result.get('error')}\n\n**Learnings so far:** {learnings}\n\nPlease provide direction to continue."
                         direction = self.pause_for_input(review_msg)
                         # Reset yellow cards and retry with human direction
                         yellow_cards = 0
@@ -407,7 +409,12 @@ Return JSON:
 
         attempt_note = ""
         if attempt > 0:
-            attempt_note = f"\n\n⚠️ This is retry attempt {attempt}. Previous attempt failed. Apply learnings and try a different approach."
+            attempt_note = (
+                f"\n\n⚠️ This is retry attempt {attempt}. Previous attempt failed. Apply learnings and try a different approach."
+                "\n\nPREVIOUS ATTEMPT FAILED: You did not include a ```summary block at the end of your response. "
+                "This is mandatory. Your response will be rejected without it. "
+                "Do not write bash commands — write file contents directly."
+            )
         if sprint.get("human_direction"):
             attempt_note += f"\n\n👤 Human direction: {sprint['human_direction']}"
 
@@ -423,6 +430,14 @@ You must:
 1. Execute ONLY the sprint objective — nothing more
 2. Flag scope creep immediately rather than proceeding
 3. End with a JSON summary block marked ```summary```
+
+CRITICAL RULES:
+- You have no ability to run bash commands or a terminal
+- Do not write ```bash blocks — they will not be executed
+- Instead write the COMPLETE file contents directly in your response
+- You MUST end your response with a ```summary block — without it the sprint fails
+- The summary block must be valid JSON with keys: success, deliverable, learnings, scope_creep_detected, error
+- If you cannot complete the objective write success: false in the summary with a clear error message — do not omit the summary block
 """
 
         prompt = f"""Execute this sprint:
@@ -452,7 +467,11 @@ Work through the objective step by step, then end with:
             return json.loads(summary_raw)
 
         # If no summary block, treat as failure
-        return {"success": False, "error": "No summary block returned", "learnings": raw[:500]}
+        return {
+            "success": False,
+            "error": "No summary block returned",
+            "learnings": "Agent did not return a parseable summary. Will retry with stricter instructions.",
+        }
 
     # ── Milestone gates ───────────────────────────────────────────────────────
 

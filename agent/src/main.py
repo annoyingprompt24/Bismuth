@@ -39,6 +39,18 @@ app.config["SECRET_KEY"] = os.urandom(24).hex()
 CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
+# ── Loop activity flag ────────────────────────────────────────────────────────
+_loop_running = False
+
+def _run_loop_tracked(agent):
+    """Wrapper that tracks whether run_loop is active."""
+    global _loop_running
+    _loop_running = True
+    try:
+        agent.run_loop()
+    finally:
+        _loop_running = False
+
 # ── State helpers ─────────────────────────────────────────────────────────────
 def read_state() -> dict:
     state_file = STATE_PATH / "bismuth.json"
@@ -68,6 +80,17 @@ def write_state(state: dict):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "agent": "ralph"})
+
+@app.route("/agent/status", methods=["GET"])
+def agent_status():
+    """Returns current phase, sprint number, and whether the loop is actively running."""
+    state = read_state()
+    return jsonify({
+        "phase": state.get("phase"),
+        "current_sprint": state.get("current_sprint", 0),
+        "loop_running": _loop_running,
+        "awaiting_input": state.get("awaiting_input", False),
+    })
 
 @app.route("/state", methods=["GET"])
 def get_state():
@@ -163,9 +186,8 @@ def accept_sprints():
     state["phase"] = "running"
     state["status"] = "green"
     write_state(state)
-    socketio.start_background_task(
-        BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH).run_loop
-    )
+    agent = BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH)
+    socketio.start_background_task(_run_loop_tracked, agent)
     return jsonify({"success": True})
 
 @app.route("/agent/input", methods=["POST"])
@@ -189,17 +211,22 @@ def agent_break():
 
 @app.route("/agent/resume", methods=["POST"])
 def agent_resume():
-    """Resume after a break or gate pause"""
+    """Resume after a break, gate pause, or crash recovery"""
     from bismuth import BismuthAgent
     state = read_state()
+    sprint_index = state.get("current_sprint", 0)
     state["phase"] = "running"
     state["status"] = "green"
     state["awaiting_input"] = False
+    state["input_prompt"] = None
     write_state(state)
-    socketio.start_background_task(
-        BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH).run_loop
-    )
-    return jsonify({"success": True})
+    socketio.emit("agent_message", {
+        "type": "system",
+        "content": f"▶ Agent loop resuming from sprint {sprint_index}"
+    })
+    agent = BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH)
+    socketio.start_background_task(_run_loop_tracked, agent)
+    return jsonify({"success": True, "resuming_from_sprint": sprint_index})
 
 # ── SocketIO events ───────────────────────────────────────────────────────────
 
@@ -213,10 +240,36 @@ def on_chat_message(data):
     """Natural language message from user terminal"""
     from bismuth import BismuthAgent
     state = read_state()
+    message = data.get("message", "").strip()
+
+    # Crash recovery — handle resume/restart commands
+    if state.get("phase") == "crash_recovery":
+        cmd = message.lower()
+        if cmd == "restart":
+            state["current_sprint"] = 0
+            write_state(state)
+            emit("agent_message", {"type": "system", "content": "↩ Restarting from sprint 0..."})
+        elif cmd == "resume":
+            emit("agent_message", {"type": "system", "content": f"▶ Resuming from sprint {state.get('current_sprint', 0)}..."})
+        else:
+            emit("agent_message", {"type": "system", "content": "Type **resume** to continue from the last sprint, or **restart** to begin from sprint 0."})
+            return
+        # Trigger resume via the REST logic directly
+        state = read_state()
+        sprint_index = state.get("current_sprint", 0)
+        state["phase"] = "running"
+        state["status"] = "green"
+        state["awaiting_input"] = False
+        state["input_prompt"] = None
+        write_state(state)
+        socketio.emit("agent_message", {"type": "system", "content": f"▶ Agent loop resuming from sprint {sprint_index}"})
+        agent = BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH)
+        socketio.start_background_task(_run_loop_tracked, agent)
+        return
 
     # During active sprint — only BREAK is accepted
     if state["phase"] == "running" and not state["awaiting_input"]:
-        if data.get("message", "").strip().upper() == "BREAK":
+        if message.upper() == "BREAK":
             BismuthAgent.request_break()
             emit("agent_message", {
                 "type": "system",
@@ -231,7 +284,7 @@ def on_chat_message(data):
 
     # Agent is awaiting input — deliver message
     if state["awaiting_input"]:
-        BismuthAgent.deliver_input(data["message"])
+        BismuthAgent.deliver_input(message)
         emit("agent_message", {"type": "system", "content": "✓ Message received by agent"})
         return
 

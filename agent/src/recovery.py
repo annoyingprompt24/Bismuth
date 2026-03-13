@@ -29,6 +29,7 @@ def check_and_recover(state_path: Path, socketio) -> dict:
     # If agent was mid-sprint or running, flag crash recovery
     if state.get("phase") in ("running", "planning"):
         log.warning("Crash detected — agent was active at last shutdown")
+        log.warning(f"Last successful sprint: {state.get('current_sprint', 0)}")
         state["phase"]          = "crash_recovery"
         state["status"]         = "red"
         state["awaiting_input"] = True
