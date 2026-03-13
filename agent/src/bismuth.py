@@ -238,7 +238,17 @@ Return a JSON roadmap in this exact structure:
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
 
-        roadmap = json.loads(raw)
+        try:
+            roadmap = json.loads(raw)
+        except json.JSONDecodeError as e:
+            log.error(f"generate_roadmap JSON parse failed: {e}. Raw: {raw[:500]}")
+            self.set_status("red", "error")
+            self.pause_for_input(
+                "🔴 **Roadmap Generation Failed to Parse**\n\n"
+                "The agent could not parse the generated roadmap. "
+                "Type **retry** to regenerate or check the agent logs for details."
+            )
+            return
         self.write_roadmap(roadmap)
         self.emit_log(f"Roadmap generated: {roadmap['total_milestones']} milestones")
 
@@ -291,7 +301,17 @@ Return JSON:
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
 
-        sprint_plan = json.loads(raw)
+        try:
+            sprint_plan = json.loads(raw)
+        except json.JSONDecodeError as e:
+            log.error(f"plan_sprints JSON parse failed: {e}. Raw: {raw[:500]}")
+            self.set_status("red", "error")
+            self.pause_for_input(
+                "🔴 **Sprint Planning Failed to Parse**\n\n"
+                "The agent could not parse the sprint plan. "
+                "Type **retry** to regenerate or check the agent logs for details."
+            )
+            return
 
         # Merge into roadmap
         roadmap["sprints"] = sprint_plan["sprints"]
@@ -464,7 +484,15 @@ Work through the objective step by step, then end with:
         # Extract summary block
         if "```summary" in raw:
             summary_raw = raw.split("```summary")[1].split("```")[0].strip()
-            return json.loads(summary_raw)
+            try:
+                return json.loads(summary_raw)
+            except json.JSONDecodeError as e:
+                log.error(f"_run_sprint_work summary JSON parse failed: {e}. Raw: {summary_raw[:500]}")
+                return {
+                    "success": False,
+                    "error": "Summary block was not valid JSON",
+                    "learnings": "Agent returned a summary block but it could not be parsed as JSON. Will retry.",
+                }
 
         # If no summary block, treat as failure
         return {
@@ -529,13 +557,18 @@ If the number of milestones changes, flag this clearly in your response before t
 
         raw = self.chat(prompt)
 
-        if "```" in raw:
-            raw_json = raw.split("```")[1]
-            if raw_json.startswith("json"):
-                raw_json = raw_json[4:]
-            updated = json.loads(raw_json.strip())
-        else:
-            updated = json.loads(raw)
+        try:
+            if "```" in raw:
+                raw_json = raw.split("```")[1]
+                if raw_json.startswith("json"):
+                    raw_json = raw_json[4:]
+                updated = json.loads(raw_json.strip())
+            else:
+                updated = json.loads(raw)
+        except json.JSONDecodeError as e:
+            log.error(f"_realign_from_gate JSON parse failed: {e}. Raw: {raw[:500]}")
+            self.emit_message("flag", "⚠️ Could not parse realignment response. Continuing with original roadmap.")
+            return
 
         old_count = roadmap.get("total_milestones", 0)
         new_count = updated.get("total_milestones", 0)
@@ -601,6 +634,9 @@ If yes, return an updated roadmap JSON. If no changes needed, return {{"no_chang
             self.write_roadmap(updated)
             self.emit_message("system", "✅ Roadmap updated at iteration checkpoint.")
 
+        except json.JSONDecodeError as e:
+            log.error(f"_iteration_checkpoint JSON parse failed: {e}. Raw: {raw[:500]}")
+            self.emit_log(f"Checkpoint parse error (invalid JSON): {e}", level="warning")
         except Exception as e:
             self.emit_log(f"Checkpoint parse error: {e}", level="warning")
 
@@ -632,10 +668,32 @@ For each DoD criterion, assess if it has been met. Return JSON:
 
         raw = self.chat(prompt)
         raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
 
-        assessment = json.loads(raw)
+        if not raw:
+            log.error("_final_assessment: empty response from Claude")
+            self.set_status("red", "error")
+            self.pause_for_input(
+                "🔴 **DoD Assessment Failed to Parse**\n\n"
+                "The agent received an empty response. "
+                "Type **retry** to attempt again or **complete** to mark the project done."
+            )
+            return
+
+        try:
+            assessment = json.loads(raw)
+        except json.JSONDecodeError as e:
+            log.error(f"_final_assessment JSON parse failed: {e}. Raw: {raw[:500]}")
+            self.set_status("red", "error")
+            self.pause_for_input(
+                "🔴 **DoD Assessment Failed to Parse**\n\n"
+                "The agent could not parse the definition of done assessment. "
+                "Type **retry** to attempt again or **complete** to mark the project done."
+            )
+            return
 
         if assessment.get("overall_pass"):
             self.set_status("green", "complete")
