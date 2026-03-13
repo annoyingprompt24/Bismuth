@@ -169,15 +169,34 @@ class BismuthAgent:
         return branch
 
     def commit_sprint(self, sprint_id: str, summary: str) -> str:
-        repo = self.get_repo()
-        repo.git.add(A=True)
-        msg = f"bismuth(sprint-{sprint_id}): {summary}"
-        commit = repo.index.commit(msg)
-        tag = f"sprint-{sprint_id}"
-        repo.create_tag(tag, message=summary)
-        sha = commit.hexsha[:8]
-        self.emit_log(f"Committed sprint {sprint_id}: {sha}")
-        return sha
+        try:
+            repo = self.get_repo()
+            repo.git.add(A=True)
+
+            msg = f"bismuth(sprint-{sprint_id}): {summary}"
+            if repo.is_dirty(untracked_files=True):
+                commit = repo.index.commit(msg)
+                sha = commit.hexsha[:8]
+                self.emit_log(f"Committed sprint {sprint_id}: {sha}")
+            else:
+                log.warning(f"Sprint {sprint_id}: no changes to commit — using last commit as reference")
+                commit = repo.head.commit
+                sha = commit.hexsha[:8]
+
+            tag = f"sprint-{sprint_id}"
+            # Delete existing tag if present (retry case)
+            try:
+                repo.git.tag("-d", tag)
+                log.info(f"Deleted existing tag {tag} before retag")
+            except Exception:
+                pass  # tag didn't exist
+            repo.create_tag(tag, message=summary)
+
+            return sha
+        except Exception as e:
+            log.warning(f"Git operations failed for sprint {sprint_id}: {e} — continuing without commit")
+            self.emit_log(f"⚠️ Git commit/tag failed: {e}", level="warning")
+            return "no-commit"
 
     def get_gitea_url(self, sprint_id: str) -> str:
         gitea_base = os.getenv("GITEA_URL", "http://localhost:3001")
