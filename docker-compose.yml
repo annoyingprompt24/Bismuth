@@ -30,7 +30,7 @@ services:
     environment:
       - NODE_ENV=production
       - AGENT_API_URL=http://bismuth-agent:5000
-      - NEXT_PUBLIC_AGENT_URL=http://192.168.50.119:3068
+      - NEXT_PUBLIC_AGENT_URL=http://192.168.50.101:3068
       - GITEA_URL=http://bismuth-gitea:3000
     volumes:
       - bismuth-state:/app/state:ro
