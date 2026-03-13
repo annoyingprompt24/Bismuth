@@ -3,6 +3,32 @@
 import { useState } from 'react'
 import yaml from 'js-yaml'
 
+function ListInput({ field, label, items, onChange, onAdd, onRemove }: {
+  field: string
+  label: string
+  items: string[]
+  onChange: (index: number, value: string) => void
+  onAdd: () => void
+  onRemove: (index: number) => void
+}) {
+  return (
+    <div className="mb-5">
+      <label className="block text-bismuth-dim text-xs font-mono uppercase tracking-wider mb-2">{label}</label>
+      {items.map((item, i) => (
+        <div key={i} className="flex gap-2 mb-2">
+          <input value={item}
+            onChange={e => onChange(i, e.target.value)}
+            className="flex-1 bg-bismuth-bg border border-bismuth-border rounded-lg px-3 py-2 text-bismuth-text text-sm focus:outline-none focus:border-bismuth-accent"
+            placeholder={`${label} item ${i + 1}`} />
+          <button onClick={() => onRemove(i)}
+            className="text-bismuth-dim hover:text-bismuth-red px-2 text-lg">×</button>
+        </div>
+      ))}
+      <button onClick={onAdd} className="text-bismuth-accent text-sm hover:underline">+ Add item</button>
+    </div>
+  )
+}
+
 const FORM_TEMPLATE = {
   project: {
     name: '',
@@ -163,24 +189,6 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
   )
 
   // ── Form mode ─────────────────────────────────────────────────────────────
-  const ListInput = ({ field, label }: { field: string, label: string }) => (
-    <div className="mb-5">
-      <label className="block text-bismuth-dim text-xs font-mono uppercase tracking-wider mb-2">{label}</label>
-      {(form.project as any)[field].map((item: string, i: number) => (
-        <div key={i} className="flex gap-2 mb-2">
-          <input value={item}
-            onChange={e => updateListField(field, i, e.target.value)}
-            className="flex-1 bg-bismuth-bg border border-bismuth-border rounded-lg px-3 py-2 text-bismuth-text text-sm focus:outline-none focus:border-bismuth-accent"
-            placeholder={`${label} item ${i + 1}`} />
-          <button onClick={() => removeListItem(field, i)}
-            className="text-bismuth-dim hover:text-bismuth-red px-2 text-lg">×</button>
-        </div>
-      ))}
-      <button onClick={() => addListItem(field)}
-        className="text-bismuth-accent text-sm hover:underline">+ Add item</button>
-    </div>
-  )
-
   return (
     <div className="h-screen overflow-y-auto bg-bismuth-bg">
       <div className="max-w-2xl mx-auto py-10 px-6">
@@ -202,11 +210,14 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
             placeholder="What are we building and why?" />
         </div>
 
-        <ListInput field="definition_of_done" label="Definition of Done" />
-        <ListInput field="scope_boundaries" label="Scope Boundaries" />
-        <ListInput field="constraints" label="Constraints" />
-        <ListInput field="milestones" label="Suggested Milestones" />
-        <ListInput field="tech_stack" label="Tech Stack" />
+        {(['definition_of_done', 'scope_boundaries', 'constraints', 'milestones', 'tech_stack'] as const).map(field => (
+          <ListInput key={field} field={field}
+            label={{ definition_of_done: 'Definition of Done', scope_boundaries: 'Scope Boundaries', constraints: 'Constraints', milestones: 'Suggested Milestones', tech_stack: 'Tech Stack' }[field]}
+            items={(form.project as any)[field]}
+            onChange={(i, v) => updateListField(field, i, v)}
+            onAdd={() => addListItem(field)}
+            onRemove={i => removeListItem(field, i)} />
+        ))}
 
         <div className="mb-6">
           <label className="block text-bismuth-dim text-xs font-mono uppercase tracking-wider mb-2">

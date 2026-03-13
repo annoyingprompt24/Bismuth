@@ -106,7 +106,7 @@ def setup_keys():
 def project_start():
     """Receive project YAML and kick off roadmap generation"""
     import yaml
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
 
     data = request.json
     if not data.get("yaml_content"):
@@ -131,7 +131,7 @@ def project_start():
 @app.route("/project/accept-roadmap", methods=["POST"])
 def accept_roadmap():
     """User accepts the proposed roadmap — proceed to sprint planning"""
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
     state = read_state()
     state["phase"] = "planning"
     write_state(state)
@@ -143,7 +143,7 @@ def accept_roadmap():
 @app.route("/project/accept-sprints", methods=["POST"])
 def accept_sprints():
     """User accepts sprint plan — begin execution"""
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
     state = read_state()
     state["phase"] = "running"
     state["status"] = "green"
@@ -156,7 +156,7 @@ def accept_sprints():
 @app.route("/agent/input", methods=["POST"])
 def agent_input():
     """Human response to an agent pause/clarification request"""
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
     data = request.json
     if not data.get("message"):
         return jsonify({"error": "No message provided"}), 400
@@ -167,7 +167,7 @@ def agent_input():
 @app.route("/agent/break", methods=["POST"])
 def agent_break():
     """Issue BREAK command — pause at end of current sprint"""
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
     BismuthAgent.request_break()
     log.info("BREAK command issued by user")
     return jsonify({"success": True, "message": "Break requested — will pause after current sprint"})
@@ -175,7 +175,7 @@ def agent_break():
 @app.route("/agent/resume", methods=["POST"])
 def agent_resume():
     """Resume after a break or gate pause"""
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
     state = read_state()
     state["phase"] = "running"
     state["status"] = "green"
@@ -196,7 +196,7 @@ def on_connect():
 @socketio.on("chat_message")
 def on_chat_message(data):
     """Natural language message from user terminal"""
-    from src.bismuth import BismuthAgent
+    from bismuth import BismuthAgent
     state = read_state()
 
     # During active sprint — only BREAK is accepted
