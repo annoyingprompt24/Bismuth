@@ -10,8 +10,18 @@ import DashboardView from '@/components/DashboardView'
 
 type View = 'loading' | 'setup' | 'projects' | 'new-project' | 'settings' | 'dashboard'
 
+// Phases that mean a project is actively running — dashboard should be shown
+const DASHBOARD_PHASES = [
+  'awaiting_roadmap_approval',
+  'awaiting_sprint_approval',
+  'running',
+  'paused',
+  'complete',
+  'crash_recovery',
+]
+
 export default function Home() {
-  const { state, connected, agentUrl, loadProject } = useBismuthSocket()
+  const { state, connected, agentUrl, loadProject, roadmap } = useBismuthSocket()
   const [view, setView] = useState<View>('loading')
 
   // Initial routing — only fires while view is still 'loading'
@@ -26,6 +36,20 @@ export default function Home() {
       setView('projects')
     }
   }, [state, connected, view])
+
+  // Transition from new-project waiting screen when phase advances past generation
+  useEffect(() => {
+    if (view !== 'new-project') return
+    if (state && DASHBOARD_PHASES.includes(state.phase)) {
+      setView('dashboard')
+    }
+  }, [state?.phase, view])
+
+  // Also transition when roadmap data arrives (may arrive before state_update)
+  useEffect(() => {
+    if (view !== 'new-project' || !roadmap) return
+    setView('dashboard')
+  }, [roadmap, view])
 
   if (view === 'loading') return (
     <div className="h-screen flex items-center justify-center bg-bismuth-bg">

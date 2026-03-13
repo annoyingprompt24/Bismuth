@@ -91,13 +91,13 @@ class BismuthAgent:
             self.client = anthropic.Anthropic(api_key=api_key)
         return self.client
 
-    def chat(self, user_message: str, system: Optional[str] = None) -> str:
+    def chat(self, user_message: str, system: Optional[str] = None, max_tokens: int = 4096) -> str:
         """Send a message to Claude and return the response text."""
         self.conversation_history.append({"role": "user", "content": user_message})
 
         kwargs = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 4096,
+            "max_tokens": max_tokens,
             "messages": self.conversation_history,
         }
         if system:
@@ -483,8 +483,8 @@ Return JSON:
         written = []
 
         # ── Format 1: ### FILE: header ────────────────────────────────────────
-        # Strip out the summary block first so it doesn't bleed into file content
-        body = text.split("```summary")[0] if "```summary" in text else text
+        # Remove the summary block (wherever it sits) so it doesn't bleed into file content
+        body = re.sub(r'```summary.*?```', '', text, flags=re.DOTALL)
 
         parts = re.split(r"^### FILE:\s*(.+)$", body, flags=re.MULTILINE)
         # parts = [preamble, filename1, content1, filename2, content2, ...]
@@ -537,8 +537,8 @@ Return JSON:
         if attempt > 0:
             attempt_note = (
                 f"\n\n⚠️ This is retry attempt {attempt}. Previous attempt failed. Apply learnings and try a different approach."
-                "\n\nPREVIOUS ATTEMPT FAILED: You did not include a ```summary block at the end of your response. "
-                "This is mandatory. Your response will be rejected without it. "
+                "\n\nPREVIOUS ATTEMPT FAILED: You did not include a ```summary block. "
+                "This is mandatory. Write the ```summary block FIRST before any files. "
                 "Do not write bash commands — write file contents directly."
             )
         if sprint.get("human_direction"):
@@ -555,8 +555,23 @@ PREVIOUS LEARNINGS & CONTEXT:
 You must:
 1. Execute ONLY the sprint objective — nothing more
 2. Flag scope creep immediately rather than proceeding
-3. Output every file using the FILE block format below
-4. End with a JSON summary block marked ```summary```
+3. Write your ```summary block FIRST before any file contents
+4. Then output every file using the FILE block format below
+
+IMPORTANT: Always write your ```summary block FIRST before any file contents.
+Structure your response like this:
+
+```summary
+{{
+  "success": true,
+  "deliverable": "description of what was built",
+  "learnings": "what worked well",
+  "scope_creep_detected": false,
+  "error": null
+}}
+```
+
+Then write your files using ### FILE: filename format.
 
 FILE OUTPUT FORMAT — you MUST use this exact format for every file you create or modify:
 
@@ -573,7 +588,7 @@ CRITICAL RULES:
 - Do NOT write ```bash blocks — they will not be executed
 - Write the COMPLETE file contents for every file — no truncation, no "..." placeholders
 - You MUST write at least one ### FILE: block — sprints that produce no files fail
-- You MUST end your response with a ```summary block — without it the sprint fails
+- You MUST include a ```summary block — without it the sprint fails
 - The summary block must be valid JSON with keys: success, deliverable, learnings, scope_creep_detected, error
 - If you cannot complete the objective write success: false in the summary with a clear error message
 """
@@ -586,14 +601,8 @@ Objective: {sprint['objective']}
 Acceptance Criteria: {json.dumps(sprint.get('acceptance_criteria', []))}
 {attempt_note}
 
-Work through the objective step by step. For each file you create or modify use:
+Start your response with the summary block, then write your files:
 
-### FILE: path/to/file.ext
-```language
-<complete file contents>
-```
-
-Then end with:
 ```summary
 {{
   "success": true/false,
@@ -602,9 +611,16 @@ Then end with:
   "scope_creep_detected": false,
   "error": null
 }}
+```
+
+Then for each file you create or modify:
+
+### FILE: path/to/file.ext
+```language
+<complete file contents>
 ```"""
 
-        raw = self.chat(prompt, system=system)
+        raw = self.chat(prompt, system=system, max_tokens=8192)
 
         # Extract and write files to workspace
         files_written = self._extract_files_from_response(raw)
@@ -613,13 +629,13 @@ Then end with:
         else:
             self.emit_log("⚠️ No files extracted from sprint response", level="warning")
 
-        # Extract summary block
-        if "```summary" in raw:
-            summary_raw = raw.split("```summary")[1].split("```")[0].strip()
+        # Extract summary block — search entire response so truncation doesn't hide it
+        summary_match = re.search(r'```summary\s*(\{.*?\})\s*```', raw, re.DOTALL)
+        if summary_match:
             try:
-                result = json.loads(summary_raw)
+                result = json.loads(summary_match.group(1))
             except json.JSONDecodeError as e:
-                log.error(f"_run_sprint_work summary JSON parse failed: {e}. Raw: {summary_raw[:500]}")
+                log.error(f"_run_sprint_work summary JSON parse failed: {e}. Raw: {summary_match.group(1)[:500]}")
                 return {
                     "success": False,
                     "error": "Summary block was not valid JSON",
