@@ -73,6 +73,13 @@ def health():
 def get_state():
     return jsonify(read_state())
 
+@app.route("/roadmap", methods=["GET"])
+def get_roadmap():
+    roadmap_file = STATE_PATH / "roadmap.json"
+    if roadmap_file.exists():
+        return jsonify(json.loads(roadmap_file.read_text()))
+    return jsonify({})
+
 @app.route("/setup/keys", methods=["POST"])
 def setup_keys():
     """Receive API keys from first-run UI and persist to state/.env"""

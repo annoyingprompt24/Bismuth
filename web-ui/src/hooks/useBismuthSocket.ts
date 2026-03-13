@@ -68,6 +68,11 @@ export function useBismuthSocket() {
       .then(d => setState(d))
       .catch(() => {})
 
+    fetch(`${agentUrl}/roadmap`)
+      .then(r => r.json())
+      .then(d => { if (d && Object.keys(d).length > 0) setRoadmap(d) })
+      .catch(() => {})
+
     return () => { socket.disconnect() }
   }, [agentUrl])
 
