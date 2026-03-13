@@ -42,13 +42,15 @@ app.config["SECRET_KEY"] = os.urandom(24).hex()
 CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
-# ── Loop activity flag ────────────────────────────────────────────────────────
+# ── Loop activity flag + current agent reference ──────────────────────────────
 _loop_running = False
+_current_agent = None
 
 def _run_loop_tracked(agent):
     """Wrapper that tracks whether run_loop is active."""
-    global _loop_running
+    global _loop_running, _current_agent
     _loop_running = True
+    _current_agent = agent
     try:
         agent.run_loop()
     finally:
@@ -128,7 +130,19 @@ def agent_status():
 
 @app.route("/state", methods=["GET"])
 def get_state():
-    return jsonify(read_state())
+    state = read_state()
+    if _current_agent is not None:
+        total = _current_agent.tokens_used_input + _current_agent.tokens_used_output
+        limit = _current_agent.token_limit_session
+        state["token_stats"] = {
+            "session_input":   _current_agent.tokens_used_input,
+            "session_output":  _current_agent.tokens_used_output,
+            "session_total":   total,
+            "limit_session":   limit,
+            "limit_per_minute": _current_agent.token_limit_per_minute,
+            "percent_used":    round(total / limit * 100, 1) if limit else 0,
+        }
+    return jsonify(state)
 
 @app.route("/project/export", methods=["GET"])
 def export_project():

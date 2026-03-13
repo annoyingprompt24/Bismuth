@@ -69,10 +69,14 @@ services:
       - WORKSPACE_PATH=/workspace
       - STATE_PATH=/state
       - LOGS_PATH=/logs
+      - SPRINT_DELAY_SECONDS=20
+      - TOKEN_LIMIT_SESSION=500000
+      - TOKEN_LIMIT_PER_MINUTE=25000
     volumes:
       - bismuth-workspace:/workspace
       - bismuth-state:/state
       - bismuth-logs:/logs
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - bismuth-gitea
     networks:

@@ -3,6 +3,15 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
 
+export interface TokenStats {
+  session_input: number
+  session_output: number
+  session_total: number
+  limit_session: number
+  limit_per_minute: number
+  percent_used: number
+}
+
 export interface AgentState {
   initialised: boolean
   project: string | null
@@ -13,6 +22,7 @@ export interface AgentState {
   status: 'grey' | 'green' | 'yellow' | 'red' | 'blue'
   awaiting_input: boolean
   input_prompt: string | null
+  token_stats?: TokenStats
 }
 
 export interface AgentMessage {
@@ -129,6 +139,10 @@ export function useBismuthSocket() {
     // State update arrives via WebSocket state_update event
   }, [agentUrl])
 
+  const clearRoadmap = useCallback(() => {
+    setRoadmap(null)
+  }, [])
+
   return {
     connected,
     agentUrl,
@@ -144,5 +158,6 @@ export function useBismuthSocket() {
     setupKeys,
     startProject,
     loadProject,
+    clearRoadmap,
   }
 }

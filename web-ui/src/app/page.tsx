@@ -21,7 +21,7 @@ const DASHBOARD_PHASES = [
 ]
 
 export default function Home() {
-  const { state, connected, agentUrl, loadProject, roadmap } = useBismuthSocket()
+  const { state, connected, agentUrl, loadProject, roadmap, clearRoadmap } = useBismuthSocket()
   const [view, setView] = useState<View>('loading')
 
   // Initial routing — only fires while view is still 'loading'
@@ -73,7 +73,7 @@ export default function Home() {
   if (view === 'projects') return (
     <ProjectsScreen
       agentUrl={agentUrl!}
-      onNewProject={() => setView('new-project')}
+      onNewProject={() => { clearRoadmap(); setView('new-project') }}
       onOpenProject={async (id) => {
         await loadProject(id)
         setView('dashboard')

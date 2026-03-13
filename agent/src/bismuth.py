@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Optional
 
 import re
+import subprocess
+import urllib.request
 import anthropic
 import git
 import eventlet.tpool
@@ -39,6 +41,14 @@ class BismuthAgent:
         self.logs_path   = logs_path
         self.client      = None  # initialised lazily after API key confirmed
         self.conversation_history = []
+
+        # Token usage tracking
+        self.tokens_used_input      = 0
+        self.tokens_used_output     = 0
+        self.tokens_this_minute     = 0
+        self.tokens_minute_reset    = time.time()
+        self.token_limit_session    = int(os.environ.get("TOKEN_LIMIT_SESSION", "500000"))
+        self.token_limit_per_minute = int(os.environ.get("TOKEN_LIMIT_PER_MINUTE", "25000"))
 
     # ── Class-level control methods (callable without instance) ──────────────
 
@@ -92,8 +102,22 @@ class BismuthAgent:
         return self.client
 
     def chat(self, user_message: str, system: Optional[str] = None, max_tokens: int = 4096) -> str:
-        """Send a message to Claude and return the response text."""
+        """Send a message to Claude and return the response text. Retries on rate limit."""
         self.conversation_history.append({"role": "user", "content": user_message})
+
+        # Self-throttle if approaching per-minute token limit
+        now = time.time()
+        if now - self.tokens_minute_reset > 60:
+            self.tokens_this_minute = 0
+            self.tokens_minute_reset = now
+        if self.tokens_this_minute > self.token_limit_per_minute:
+            wait = 60 - (now - self.tokens_minute_reset)
+            if wait > 0:
+                log.warning(f"Approaching rate limit ({self.tokens_this_minute} tokens this minute), waiting {wait:.0f}s")
+                self.emit_log(f"⏳ Self-throttling for {wait:.0f}s to avoid rate limit...", level="warning")
+                time.sleep(wait)
+            self.tokens_this_minute = 0
+            self.tokens_minute_reset = time.time()
 
         kwargs = {
             "model": "claude-sonnet-4-20250514",
@@ -103,13 +127,50 @@ class BismuthAgent:
         if system:
             kwargs["system"] = system
 
-        # Run in a real OS thread so httpx doesn't block the eventlet event loop
-        response = eventlet.tpool.execute(self.get_client().messages.create, **kwargs)
-        reply = response.content[0].text
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Run in a real OS thread so httpx doesn't block the eventlet event loop
+                response = eventlet.tpool.execute(self.get_client().messages.create, **kwargs)
+                reply = response.content[0].text
+                self.conversation_history.append({"role": "assistant", "content": reply})
+                self.emit_message("assistant", reply)
 
-        self.conversation_history.append({"role": "assistant", "content": reply})
-        self.emit_message("assistant", reply)
-        return reply
+                # Accumulate token usage
+                usage = response.usage
+                self.tokens_used_input  += usage.input_tokens
+                self.tokens_used_output += usage.output_tokens
+                self.tokens_this_minute += usage.input_tokens
+                log.info(
+                    f"Tokens: +{usage.input_tokens}in +{usage.output_tokens}out | "
+                    f"Session total: {self.tokens_used_input}in {self.tokens_used_output}out"
+                )
+
+                # Check session budget
+                session_total = self.tokens_used_input + self.tokens_used_output
+                if session_total > self.token_limit_session:
+                    direction = self.pause_for_input(
+                        f"⚠️ **Token Budget Reached**\n\n"
+                        f"Session has used {session_total:,} tokens "
+                        f"(limit: {self.token_limit_session:,}).\n\n"
+                        f"Type **continue** to raise the limit by 500,000 tokens and proceed, "
+                        f"or **stop** to end the session."
+                    )
+                    if direction.strip().lower() == "continue":
+                        self.token_limit_session += 500_000
+                        self.emit_log(f"Token limit raised to {self.token_limit_session:,}")
+
+                return reply
+            except anthropic.RateLimitError:
+                wait = 60 * (attempt + 1)  # 60s, 120s, 180s
+                log.warning(f"Rate limit hit, waiting {wait}s before retry {attempt + 1}/{max_retries}")
+                self.emit_log(f"⏳ Rate limit reached — waiting {wait}s before continuing...", level="warning")
+                time.sleep(wait)
+            except Exception as e:
+                log.error(f"API call failed: {e}")
+                raise
+
+        raise Exception("Max retries exceeded due to rate limiting")
 
     # ── Emit helpers ──────────────────────────────────────────────────────────
 
@@ -259,7 +320,7 @@ Return a JSON roadmap in this exact structure:
   ]
 }}"""
 
-        raw = self.chat(prompt, system=system)
+        raw = self.chat(prompt, system=system, max_tokens=2048)
 
         # Strip markdown fences if present
         raw = raw.strip()
@@ -324,7 +385,7 @@ Return JSON:
   ]
 }}"""
 
-        raw = self.chat(prompt, system=system)
+        raw = self.chat(prompt, system=system, max_tokens=2048)
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
@@ -386,6 +447,12 @@ Return JSON:
 
             # Execute the sprint
             success = self._execute_sprint(sprint, i)
+
+            # Inter-sprint delay to avoid burst rate limiting
+            sprint_delay = int(os.environ.get("SPRINT_DELAY_SECONDS", "10"))
+            if sprint_delay > 0 and i < len(sprints) - 1:
+                self.emit_log(f"⏱ Waiting {sprint_delay}s before next sprint...")
+                time.sleep(sprint_delay)
 
             # Iteration checkpoint
             sprints_per = roadmap.get("sprints_per_iteration", 6)
@@ -620,7 +687,7 @@ Then for each file you create or modify:
 <complete file contents>
 ```"""
 
-        raw = self.chat(prompt, system=system, max_tokens=8192)
+        raw = self.chat(prompt, system=system, max_tokens=4096)
 
         # Extract and write files to workspace
         files_written = self._extract_files_from_response(raw)
@@ -652,6 +719,16 @@ Then for each file you create or modify:
                         "No file blocks were detected in the response. Will retry with stricter instructions."
                     ),
                 }
+
+            # Static validation — run after files land on disk
+            if result.get("success") and files_written:
+                validation_errors = self._validate_sprint(files_written)
+                if validation_errors:
+                    return {
+                        "success": False,
+                        "error": "Static validation failed:\n" + "\n".join(f"• {e}" for e in validation_errors),
+                        "learnings": "Fix the validation errors listed above before marking the sprint complete.",
+                    }
 
             return result
 
@@ -687,14 +764,26 @@ Then for each file you create or modify:
 
         prev_milestone = milestones[current_idx - 1]
         if prev_milestone.get("status") == "complete":
-            # Pause at milestone gate
+            # Run smoke test before pausing for human review
             self.set_status("blue")
-            response = self.pause_for_input(
+            smoke = self._smoke_test_milestone(current_idx)
+            if smoke and not smoke.get("passed"):
+                self.emit_log("Smoke test failed — running fix sprint before gate pause", level="warning")
+                self._fix_from_smoke_test(smoke.get("error", "Unknown smoke test failure"))
+
+            # Build gate message with smoke test outcome
+            gate_msg = (
                 f"🔵 **Milestone Gate: {prev_milestone['title']} Complete**\n\n"
                 f"The previous milestone has been reached. Please review and choose:\n"
                 f"- Type **accept** to proceed to {milestones[current_idx]['title']}\n"
                 f"- Type **realign** followed by your feedback to adjust the plan"
             )
+            if smoke and smoke.get("passed"):
+                gate_msg += f"\n\n✅ **Smoke test passed** — app is running correctly."
+            elif smoke and not smoke.get("passed"):
+                gate_msg += f"\n\n⚠️ **Smoke test failed:** {smoke.get('error')}\nA fix sprint was attempted — please verify before accepting."
+
+            response = self.pause_for_input(gate_msg)
 
             if response.lower().startswith("realign"):
                 feedback = response[len("realign"):].strip()
@@ -916,6 +1005,221 @@ For each DoD criterion, assess if it has been met. Return JSON:
             self.emit_log(f"Pushed to external repo: {external}")
         except Exception as e:
             self.emit_log(f"External push failed: {e}", level="error")
+
+    # ── Static validation ─────────────────────────────────────────────────────
+
+    def _validate_sprint(self, files_written: list) -> list:
+        """Run static analysis on files written during a sprint. Returns list of error strings."""
+        errors = []
+        workspace = self.workspace
+
+        is_node   = (workspace / "package.json").exists()
+
+        for filename in files_written:
+            filepath = workspace / filename
+            if not filepath.exists():
+                errors.append(f"File reported written but does not exist: {filename}")
+                continue
+
+            # JS syntax check via node --check
+            if filename.endswith(".js"):
+                result = subprocess.run(
+                    ["node", "--check", str(filepath)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    errors.append(f"Syntax error in {filename}: {result.stderr.strip()}")
+
+            # Python syntax check via py_compile
+            if filename.endswith(".py"):
+                result = subprocess.run(
+                    ["python", "-m", "py_compile", str(filepath)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    errors.append(f"Syntax error in {filename}: {result.stderr.strip()}")
+
+            # HTML — check that referenced script/link files exist
+            if filename.endswith(".html"):
+                content = filepath.read_text(encoding="utf-8", errors="replace")
+                for match in re.finditer(r'<script[^>]+src=["\']([^"\']+)["\']', content):
+                    ref = match.group(1)
+                    if not ref.startswith("http") and not ref.startswith("//"):
+                        ref_path = workspace / ref.lstrip("/").replace("/", os.sep)
+                        if not ref_path.exists():
+                            errors.append(f"Missing script in {filename}: {ref}")
+                for match in re.finditer(r'<link[^>]+href=["\']([^"\']+)["\']', content):
+                    ref = match.group(1)
+                    if not ref.startswith("http") and not ref.startswith("//"):
+                        ref_path = workspace / ref.lstrip("/").replace("/", os.sep)
+                        if not ref_path.exists():
+                            errors.append(f"Missing link in {filename}: {ref}")
+
+            # Node.js — check relative require() targets exist
+            if is_node and filename.endswith(".js"):
+                content = filepath.read_text(encoding="utf-8", errors="replace")
+                for match in re.finditer(r"""require\(['"](\.[^'"]+)['"]\)""", content):
+                    ref = match.group(1)
+                    base = filepath.parent
+                    resolved = (base / ref).resolve()
+                    if not resolved.exists() and not resolved.with_suffix(".js").exists():
+                        errors.append(f"Unresolved require in {filename}: {ref}")
+
+        if errors:
+            self.emit_message("flag",
+                f"🔍 Validation: {len(errors)} error(s) found\n" +
+                "\n".join(f"  • {e}" for e in errors))
+        else:
+            self.emit_message("system",
+                f"🔍 Validation passed — {len(files_written)} file(s) checked")
+
+        return errors
+
+    # ── Docker smoke test ─────────────────────────────────────────────────────
+
+    def _smoke_test_milestone(self, milestone_num: int) -> Optional[dict]:
+        """Spin up the project in Docker and verify it responds on HTTP. Returns result dict."""
+        self.emit_message("system", f"🐳 Running milestone {milestone_num} smoke test...")
+        workspace = str(self.workspace)
+
+        # Detect project type
+        if (self.workspace / "package.json").exists():
+            image = "node:20-alpine"
+            with open(self.workspace / "package.json") as f:
+                pkg = json.load(f)
+            start_cmd = pkg.get("scripts", {}).get("start", "node server.js")
+            setup_cmd = f"cd /app && npm install --silent && {start_cmd}"
+            port = 3000
+            project_type = "node"
+        elif (self.workspace / "requirements.txt").exists():
+            image = "python:3.12-slim"
+            setup_cmd = "cd /app && pip install -r requirements.txt -q && python app.py"
+            port = 5000
+            project_type = "python"
+        elif (self.workspace / "index.html").exists() or (self.workspace / "public" / "index.html").exists():
+            image = "nginx:alpine"
+            setup_cmd = None
+            port = 80
+            project_type = "static"
+        else:
+            log.warning("Could not detect project type for smoke test — skipping")
+            return None
+
+        container = None
+        try:
+            import docker as docker_sdk
+            client = docker_sdk.from_env()
+
+            # Pull image if not cached
+            try:
+                client.images.get(image)
+            except docker_sdk.errors.ImageNotFound:
+                self.emit_log(f"Pulling {image} for smoke test...")
+                client.images.pull(image)
+
+            if project_type == "static":
+                static_dir = str(self.workspace / "public") if (self.workspace / "public").exists() else workspace
+                container = client.containers.run(
+                    image, detach=True, remove=False,
+                    volumes={static_dir: {"bind": "/usr/share/nginx/html", "mode": "ro"}},
+                    ports={f"{port}/tcp": None},
+                )
+            else:
+                container = client.containers.run(
+                    image, command=["sh", "-c", setup_cmd],
+                    detach=True, remove=False,
+                    volumes={workspace: {"bind": "/app", "mode": "rw"}},
+                    ports={f"{port}/tcp": None},
+                    environment={"PORT": str(port), "NODE_ENV": "test"},
+                )
+
+            # Wait up to 30s for port binding
+            host_port = None
+            for _ in range(30):
+                time.sleep(1)
+                container.reload()
+                if container.status == "exited":
+                    logs = container.logs(tail=20).decode(errors="replace")
+                    raise Exception(f"Container exited early.\n{logs}")
+                bindings = container.ports.get(f"{port}/tcp")
+                if bindings:
+                    host_port = bindings[0]["HostPort"]
+                    break
+
+            if not host_port:
+                raise Exception("App did not bind to port within 30s")
+
+            # HTTP health check — up to 10 attempts
+            for _ in range(10):
+                try:
+                    resp = urllib.request.urlopen(f"http://localhost:{host_port}", timeout=3)
+                    if resp.status == 200:
+                        self.emit_message("system", f"✅ Smoke test passed — app responded on port {host_port}")
+                        return {"passed": True, "port": host_port}
+                except Exception:
+                    time.sleep(1)
+
+            raise Exception("App did not respond to HTTP request within 10s")
+
+        except Exception as e:
+            error_msg = str(e)
+            log.error(f"Smoke test failed: {error_msg}")
+            self.emit_message("flag", f"⚠️ Smoke test failed: {error_msg}")
+            return {"passed": False, "error": error_msg}
+
+        finally:
+            if container:
+                try:
+                    container.stop(timeout=3)
+                    container.remove()
+                except Exception:
+                    pass
+
+    def _run_custom_sprint(self, objective: str, custom_prompt: str) -> dict:
+        """Lightweight sprint executor for fix sprints — takes a prompt directly."""
+        raw = self.chat(custom_prompt, system=(
+            "You are Ralph, an AI development agent. Fix the reported issue. "
+            "Write your ```summary block FIRST, then output corrected files using ### FILE: format."
+        ), max_tokens=4096)
+
+        files_written = self._extract_files_from_response(raw)
+        if files_written:
+            self.emit_log(f"📁 Fix sprint wrote {len(files_written)} file(s): {', '.join(files_written)}")
+
+        summary_match = re.search(r'```summary\s*(\{.*?\})\s*```', raw, re.DOTALL)
+        if summary_match:
+            try:
+                return json.loads(summary_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        return {"success": False, "error": "No parseable summary from fix sprint"}
+
+    def _fix_from_smoke_test(self, error: str):
+        """Run a targeted fix sprint when the smoke test fails at a milestone gate."""
+        self.emit_log("Running smoke-test fix sprint...", level="warning")
+        prompt = f"""The project failed a smoke test with this error:
+
+{error}
+
+Diagnose and fix the issue. Common causes:
+- Missing files referenced in HTML or JS
+- Wrong entry point in package.json
+- Port not being listened on correctly
+- Missing dependencies in package.json or requirements.txt
+- CORS issues with external APIs (proxy through server instead)
+
+Fix the issue and output corrected files using ### FILE: format.
+Start with a ```summary block."""
+
+        result = self._run_custom_sprint("Fix: smoke test failure", prompt)
+        if result.get("success"):
+            self.emit_log("Smoke test fix sprint succeeded")
+            sha = self.commit_sprint("smoke-fix", "fix: smoke test failures at milestone gate")
+            self.emit_log(f"Fix committed: {sha}")
+        else:
+            log.warning(f"Smoke test fix sprint failed: {result.get('error')}")
+            self.emit_message("flag", f"⚠️ Automatic fix sprint did not fully resolve the issue. Manual review recommended.")
 
     # ── BISMUTH.md update ───────────────────────────────────────────────────────
 
