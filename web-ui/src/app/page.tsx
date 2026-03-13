@@ -24,13 +24,16 @@ export default function Home() {
   const { state, connected, agentUrl, loadProject, roadmap, clearRoadmap } = useBismuthSocket()
   const [view, setView] = useState<View>('loading')
 
+  // Phases that should never auto-route to dashboard (idle/reset states)
+  const IDLE_PHASES = ['setup', 'idle', 'reset']
+
   // Initial routing — only fires while view is still 'loading'
   useEffect(() => {
     if (!connected || !state || view !== 'loading') return
 
     if (!state.initialised) {
       setView('setup')
-    } else if (state.project && state.phase !== 'setup') {
+    } else if (state.project && !IDLE_PHASES.includes(state.phase)) {
       setView('dashboard')
     } else {
       setView('projects')
@@ -46,8 +49,10 @@ export default function Home() {
   }, [state?.phase, view])
 
   // Also transition when roadmap data arrives (may arrive before state_update)
+  // Only fire if roadmap has actual content — guards against empty {} from a reset
   useEffect(() => {
     if (view !== 'new-project' || !roadmap) return
+    if (Object.keys(roadmap).length === 0) return
     setView('dashboard')
   }, [roadmap, view])
 

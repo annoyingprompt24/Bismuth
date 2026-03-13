@@ -374,6 +374,51 @@ def save_settings():
     log.info("Settings updated")
     return jsonify({"success": True})
 
+@app.route("/projects/reset", methods=["POST"])
+def projects_reset():
+    """Clear all active state ready for a fresh project — called by UI before showing new-project form."""
+    global _current_agent, _loop_running
+
+    # Write a clean idle state (keep initialised=True so UI stays on projects screen, not setup)
+    state = {
+        "initialised": True,
+        "project": None,
+        "project_id": None,
+        "phase": "setup",
+        "current_sprint": 0,
+        "current_iteration": 0,
+        "yellow_cards": 0,
+        "status": "grey",
+        "awaiting_input": False,
+        "input_prompt": None,
+    }
+    write_state(state)  # also emits state_update to all clients
+
+    # Remove roadmap so re-fetches return empty
+    roadmap_file = STATE_PATH / "roadmap.json"
+    if roadmap_file.exists():
+        roadmap_file.unlink()
+
+    # Remove living guide
+    guide_file = STATE_PATH / "GUIDE.md"
+    if guide_file.exists():
+        guide_file.unlink()
+
+    # Clear workspace contents but keep the directory (volume mount point)
+    if WORKSPACE.exists():
+        for item in os.scandir(WORKSPACE):
+            if item.is_dir():
+                shutil.rmtree(item.path)
+            else:
+                os.remove(item.path)
+
+    _current_agent = None
+    _loop_running = False
+
+    log.info("Project state reset via /projects/reset")
+    return jsonify({"status": "reset"})
+
+
 @app.route("/roadmap", methods=["GET"])
 def get_roadmap():
     roadmap_file = STATE_PATH / "roadmap.json"

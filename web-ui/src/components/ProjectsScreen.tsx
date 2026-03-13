@@ -46,6 +46,7 @@ export default function ProjectsScreen({
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingId, setLoadingId] = useState<string | null>(null)
+  const [resetting, setResetting] = useState(false)
 
   useEffect(() => {
     fetch(`${agentUrl}/projects`)
@@ -63,8 +64,21 @@ export default function ProjectsScreen({
     }
   }
 
+  const handleNewProject = async () => {
+    setResetting(true)
+    try {
+      await fetch(`${agentUrl}/projects/reset`, { method: 'POST' })
+      await new Promise(resolve => setTimeout(resolve, 300))
+      onNewProject()
+    } catch {
+      onNewProject()
+    } finally {
+      setResetting(false)
+    }
+  }
+
   return (
-    <div className="h-screen bg-bismuth-bg flex flex-col">
+    <div className="h-screen bg-bismuth-bg flex flex-col relative">
       {/* Header */}
       <div className="flex items-center justify-between px-8 py-5 border-b border-bismuth-border flex-shrink-0">
         <div>
@@ -79,14 +93,25 @@ export default function ProjectsScreen({
         </button>
       </div>
 
+      {/* Reset loading overlay */}
+      {resetting && (
+        <div className="absolute inset-0 z-50 bg-bismuth-bg/80 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-bismuth-accent font-mono text-sm animate-pulse-glow mb-2">Preparing new project...</div>
+            <div className="text-bismuth-dim text-xs">Clearing previous state</div>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-8">
         <div className="max-w-3xl mx-auto">
 
           {/* New Project card */}
           <button
-            onClick={onNewProject}
-            className="w-full border-2 border-dashed border-bismuth-border rounded-xl p-6 text-center hover:border-bismuth-accent hover:bg-bismuth-surface/50 transition-all group mb-6"
+            onClick={handleNewProject}
+            disabled={resetting}
+            className="w-full border-2 border-dashed border-bismuth-border rounded-xl p-6 text-center hover:border-bismuth-accent hover:bg-bismuth-surface/50 transition-all group mb-6 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div className="text-3xl mb-2 text-bismuth-dim group-hover:text-bismuth-accent transition-colors">+</div>
             <div className="text-bismuth-text group-hover:text-bismuth-accent font-medium transition-colors text-sm">New Project</div>
