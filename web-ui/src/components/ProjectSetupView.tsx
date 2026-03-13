@@ -3,8 +3,6 @@
 import { useState } from 'react'
 import yaml from 'js-yaml'
 
-const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || 'http://localhost:5000'
-
 const FORM_TEMPLATE = {
   project: {
     name: '',
@@ -18,7 +16,7 @@ const FORM_TEMPLATE = {
   }
 }
 
-export default function ProjectSetupView() {
+export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
   const [mode, setMode] = useState<'choose' | 'form' | 'upload'>('choose')
   const [form, setForm] = useState(FORM_TEMPLATE)
   const [uploadContent, setUploadContent] = useState('')
@@ -85,7 +83,7 @@ export default function ProjectSetupView() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${AGENT_URL}/project/start`, {
+      const res = await fetch(`${agentUrl}/project/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ yaml_content: content })

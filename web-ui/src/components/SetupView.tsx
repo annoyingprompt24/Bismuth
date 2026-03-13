@@ -2,9 +2,7 @@
 
 import { useState } from 'react'
 
-const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || 'http://localhost:5000'
-
-export default function SetupView() {
+export default function SetupView({ agentUrl }: { agentUrl: string }) {
   const [step, setStep] = useState<'keys' | 'github' | 'done'>('keys')
   const [anthropicKey, setAnthropicKey] = useState('')
   const [githubClientId, setGithubClientId] = useState('')
@@ -21,7 +19,7 @@ export default function SetupView() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${AGENT_URL}/setup/keys`, {
+      const res = await fetch(`${agentUrl}/setup/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

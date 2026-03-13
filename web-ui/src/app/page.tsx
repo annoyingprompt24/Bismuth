@@ -7,7 +7,7 @@ import ProjectSetupView from '@/components/ProjectSetupView'
 import DashboardView from '@/components/DashboardView'
 
 export default function Home() {
-  const { state, connected } = useBismuthSocket()
+  const { state, connected, agentUrl } = useBismuthSocket()
   const [view, setView] = useState<'loading' | 'setup' | 'project' | 'dashboard'>('loading')
 
   useEffect(() => {
@@ -34,7 +34,7 @@ export default function Home() {
     )
   }
 
-  if (view === 'setup') return <SetupView />
-  if (view === 'project') return <ProjectSetupView />
+  if (view === 'setup') return <SetupView agentUrl={agentUrl!} />
+  if (view === 'project') return <ProjectSetupView agentUrl={agentUrl!} />
   return <DashboardView />
 }
