@@ -30,7 +30,7 @@ services:
     environment:
       - NODE_ENV=production
       - AGENT_API_URL=http://bismuth-agent:5000
-      - NEXT_PUBLIC_AGENT_URL=http://bismuth.localhost/api/agent
+      - NEXT_PUBLIC_AGENT_URL=http://YOUR_SERVER_IP:3068
       - GITEA_URL=http://bismuth-gitea:3000
     volumes:
       - bismuth-state:/app/state:ro
@@ -60,8 +60,8 @@ services:
       context: https://github.com/annoyingprompt24/Bismuth.git#main:agent
       dockerfile: Dockerfile
     container_name: bismuth-agent
-    expose:
-      - "5000"
+    ports:
+      - "3068:5000"
     environment:
       - GITEA_URL=http://bismuth-gitea:3000
       - GITEA_USER=bismuth
