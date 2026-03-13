@@ -120,6 +120,14 @@ def project_start():
     # Persist project config
     (STATE_PATH / "project.yaml").write_text(data["yaml_content"])
 
+    # Update state so the UI transitions to the dashboard immediately
+    project_name = project_config.get("project", {}).get("name", "Project")
+    state = read_state()
+    state["project"] = project_name
+    state["phase"] = "planning"
+    state["status"] = "green"
+    write_state(state)
+
     # Kick off roadmap generation in background
     socketio.start_background_task(
         BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH).generate_roadmap,

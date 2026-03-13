@@ -48,6 +48,7 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
   const [uploadContent, setUploadContent] = useState('')
   const [yamlPreview, setYamlPreview] = useState('')
   const [loading, setLoading] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
 
   const updateField = (field: string, value: any) => {
@@ -116,7 +117,7 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
       })
       const data = await res.json()
       if (data.success) {
-        window.location.reload()
+        setSubmitted(true)
       } else {
         setError(data.error || 'Failed to start project')
       }
@@ -126,6 +127,17 @@ export default function ProjectSetupView({ agentUrl }: { agentUrl: string }) {
       setLoading(false)
     }
   }
+
+  // ── Submitted — waiting for socket state_update to trigger navigation ────
+  if (submitted) return (
+    <div className="h-screen flex items-center justify-center bg-bismuth-bg">
+      <div className="text-center">
+        <div className="text-bismuth-accent text-2xl font-mono mb-3 animate-pulse-glow">BISMUTH</div>
+        <div className="text-bismuth-dim text-sm mb-1">Generating roadmap...</div>
+        <div className="text-bismuth-dim text-xs">The agent is analysing your project requirements</div>
+      </div>
+    </div>
+  )
 
   // ── Choose mode ───────────────────────────────────────────────────────────
   if (mode === 'choose') return (
