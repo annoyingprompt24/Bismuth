@@ -480,21 +480,25 @@ Return JSON:
         sprint_id    = sprint["id"]
         objective    = sprint["objective"]
         criteria     = sprint.get("acceptance_criteria", [])
-        max_retries  = 2
         yellow_cards = 0
+        attempt      = 0
 
         self.emit_log(f"▶ Sprint {sprint_id}: {sprint['title']}")
-        self.set_status("green")
+        self.set_status("green", "running")
 
         # Update roadmap sprint status
         self._update_sprint_status(sprint_id, "green")
 
-        for attempt in range(max_retries + 1):
+        # Unbounded retry loop: exits only on success, skip, or clean failure.
+        # A bounded `for` loop would exhaust its iterations at the exact point
+        # pause_for_input() returns, leaving no iteration left to act on the
+        # human's direction.  Using while True ensures the next iteration always
+        # executes after human review.
+        while True:
             try:
                 result = self._run_sprint_work(sprint, attempt)
 
                 if result["success"]:
-                    # Commit and update
                     sha = self.commit_sprint(sprint_id, objective)
                     gitea_url = self.get_gitea_url(sprint_id)
                     self._update_sprint_status(sprint_id, "complete", sha=sha, gitea_url=gitea_url)
@@ -502,31 +506,49 @@ Return JSON:
                     self.emit_log(f"✅ Sprint {sprint_id} complete: {sha}")
                     return True
 
-                else:
-                    yellow_cards += 1
-                    self._update_sprint_status(sprint_id, "yellow")
-                    self.emit_message("flag", f"🟡 **Yellow Card #{yellow_cards}** — Sprint {sprint_id}\n\n{result.get('error', 'Sprint did not meet acceptance criteria.')}")
+                yellow_cards += 1
+                self._update_sprint_status(sprint_id, "yellow")
+                self.emit_message("flag", f"🟡 **Yellow Card #{yellow_cards}** — Sprint {sprint_id}\n\n{result.get('error', 'Sprint did not meet acceptance criteria.')}")
 
-                    if yellow_cards >= 2:
-                        self._update_sprint_status(sprint_id, "red")
-                        self.set_status("red")
-                        learnings = result.get('learnings', 'None')
-                        learnings = (learnings[:200] + "...") if len(learnings) > 200 else learnings
-                        review_msg = f"🔴 **Human Review Required** — Sprint {sprint_id} has failed twice.\n\n**Issue:** {result.get('error')}\n\n**Learnings so far:** {learnings}\n\nPlease provide direction to continue."
-                        direction = self.pause_for_input(review_msg)
-                        # Reset yellow cards and retry with human direction
-                        yellow_cards = 0
-                        sprint["human_direction"] = direction
-                        self.set_status("green")
+                if yellow_cards >= 2:
+                    self._update_sprint_status(sprint_id, "red")
+                    self.set_status("red", "running")
+                    learnings = result.get('learnings', 'None')
+                    learnings = (learnings[:200] + "...") if len(learnings) > 200 else learnings
+                    review_msg = (
+                        f"🔴 **Human Review Required** — Sprint {sprint_id} has failed twice.\n\n"
+                        f"**Issue:** {result.get('error')}\n\n"
+                        f"**Learnings so far:** {learnings}\n\n"
+                        f"Type **skip** to skip this sprint, or provide direction to retry."
+                    )
+                    direction = self.pause_for_input(review_msg)
+                    if direction.strip().lower() == "skip":
+                        self.emit_log(f"Sprint {sprint_id} skipped by user")
+                        self._update_sprint_status(sprint_id, "yellow")
+                        self.set_status("yellow", "running")
+                        return False
+                    yellow_cards = 0
+                    sprint["human_direction"] = direction
+                    self.set_status("green", "running")
 
             except Exception as e:
                 self.emit_log(f"Sprint {sprint_id} exception: {e}", level="error")
                 yellow_cards += 1
                 if yellow_cards >= 2:
-                    direction = self.pause_for_input(f"🔴 **Sprint {sprint_id} errored twice:** `{e}`\n\nHow should we proceed?")
+                    direction = self.pause_for_input(
+                        f"🔴 **Sprint {sprint_id} errored twice:** `{e}`\n\n"
+                        f"Type **skip** to skip this sprint, or provide direction to retry."
+                    )
+                    if direction.strip().lower() == "skip":
+                        self.emit_log(f"Sprint {sprint_id} skipped by user after exception")
+                        self._update_sprint_status(sprint_id, "yellow")
+                        self.set_status("yellow", "running")
+                        return False
+                    yellow_cards = 0
                     sprint["human_direction"] = direction
+                    self.set_status("green", "running")
 
-        return False
+            attempt += 1
 
     # ── File extraction ───────────────────────────────────────────────────────
 
