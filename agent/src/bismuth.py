@@ -16,6 +16,7 @@ from typing import Optional
 
 import anthropic
 import git
+import eventlet.tpool
 
 log = logging.getLogger("bismuth.agent")
 
@@ -57,6 +58,7 @@ class BismuthAgent:
     def write_state(self, state: dict):
         (self.state_path / "bismuth.json").write_text(json.dumps(state, indent=2))
         self.socketio.emit("state_update", state)
+        self.socketio.sleep(0)  # yield to event loop so the update is flushed
 
     def read_roadmap(self) -> dict:
         f = self.state_path / "roadmap.json"
@@ -65,6 +67,7 @@ class BismuthAgent:
     def write_roadmap(self, roadmap: dict):
         (self.state_path / "roadmap.json").write_text(json.dumps(roadmap, indent=2))
         self.socketio.emit("roadmap_update", roadmap)
+        self.socketio.sleep(0)  # yield to event loop so the update is flushed
 
     def read_ralph_md(self) -> str:
         f = self.state_path / "BISMUTH.md"
@@ -99,7 +102,8 @@ class BismuthAgent:
         if system:
             kwargs["system"] = system
 
-        response = self.get_client().messages.create(**kwargs)
+        # Run in a real OS thread so httpx doesn't block the eventlet event loop
+        response = eventlet.tpool.execute(self.get_client().messages.create, **kwargs)
         reply = response.content[0].text
 
         self.conversation_history.append({"role": "assistant", "content": reply})

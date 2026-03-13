@@ -40,6 +40,7 @@ export default function Terminal({
 }) {
   const [input, setInput] = useState('')
   const [tab, setTab] = useState<'chat' | 'logs'>('chat')
+  const [sentFeedback, setSentFeedback] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -67,11 +68,15 @@ export default function Terminal({
       onSend(msg)
     }
     setInput('')
+    setSentFeedback(true)
+    setTimeout(() => setSentFeedback(false), 2000)
   }
 
   const inputDisabled = isRunning && !isAwaiting
 
-  const inputPlaceholder = isRunning
+  const inputPlaceholder = sentFeedback
+    ? 'Message received — agent processing...'
+    : isRunning
     ? 'Type BREAK to pause after current sprint...'
     : isAwaiting
     ? 'Type your response...'

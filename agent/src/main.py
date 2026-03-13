@@ -232,11 +232,11 @@ def on_chat_message(data):
     # Agent is awaiting input — deliver message
     if state["awaiting_input"]:
         BismuthAgent.deliver_input(data["message"])
-        emit("agent_message", {"type": "user", "content": data["message"]})
+        emit("agent_message", {"type": "system", "content": "✓ Message received by agent"})
         return
 
-    # Otherwise treat as general chat
-    emit("agent_message", {"type": "user", "content": data["message"]})
+    # Otherwise treat as general chat — confirm receipt, no echo (client already shows it)
+    emit("agent_message", {"type": "system", "content": "✓ Message received by agent"})
 
 # ── Boot ──────────────────────────────────────────────────────────────────────
 
