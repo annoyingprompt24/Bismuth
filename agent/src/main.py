@@ -3,6 +3,15 @@ Ralph Agent - Main Entry Point
 Flask API + SocketIO server for the agentic loop
 """
 
+# eventlet.monkey_patch() MUST be the very first code that runs so that
+# queue.Queue, threading.Event, time.sleep, and all stdlib blocking primitives
+# are replaced with greenlet-cooperative equivalents.  Without this, any call
+# to queue.Queue.get(block=True) inside a greenlet will deadlock the entire
+# event loop — no other socket events (including the chat_message that would
+# deliver the input) can fire.
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import json
 import logging
@@ -116,6 +125,20 @@ def _write_env_file(env: dict):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "agent": "ralph"})
+
+@app.route("/agent/queue-status", methods=["GET"])
+def queue_status():
+    """Debug endpoint — shows live agent loop and queue state."""
+    from bismuth import _input_queue as _bq
+    state = read_state()
+    return jsonify({
+        "loop_running":    _loop_running,
+        "awaiting_input":  state.get("awaiting_input", False),
+        "queue_size":      _bq.qsize(),
+        "phase":           state.get("phase"),
+        "status":          state.get("status"),
+        "current_sprint":  state.get("current_sprint", 0),
+    })
 
 @app.route("/agent/status", methods=["GET"])
 def agent_status():
@@ -415,6 +438,19 @@ def projects_reset():
     _current_agent = None
     _loop_running = False
 
+    # Drain stale messages so a new project doesn't consume input from the old one
+    from bismuth import _input_queue as _bq
+    import queue as _q
+    drained = 0
+    while True:
+        try:
+            _bq.get_nowait()
+            drained += 1
+        except _q.Empty:
+            break
+    if drained:
+        log.info(f"projects_reset: drained {drained} stale message(s) from input queue")
+
     log.info("Project state reset via /projects/reset")
     return jsonify({"status": "reset"})
 
@@ -607,8 +643,17 @@ def on_chat_message(data):
 
     # Agent is awaiting input — deliver message
     if state["awaiting_input"]:
+        log.info(f"chat_message: delivering to queue (loop_running={_loop_running}): '{message[:80]}'")
         BismuthAgent.deliver_input(message)
         emit("agent_message", {"type": "system", "content": "✓ Message received by agent"})
+
+        # If the agent loop has died but state says awaiting_input, restart it
+        # so the queued message gets consumed (e.g. loop crashed after pausing)
+        if not _loop_running:
+            log.warning("chat_message: loop not running but awaiting_input — restarting agent loop")
+            agent = BismuthAgent(socketio, STATE_PATH, WORKSPACE, LOGS_PATH)
+            socketio.start_background_task(_run_loop_tracked, agent)
+
         return
 
     # Otherwise treat as general chat — confirm receipt, no echo (client already shows it)

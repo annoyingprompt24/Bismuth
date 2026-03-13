@@ -58,7 +58,9 @@ class BismuthAgent:
 
     @classmethod
     def deliver_input(cls, message: str):
+        log.info(f"deliver_input: queue size before={_input_queue.qsize()}, message='{message[:80]}'")
         _input_queue.put(message)
+        log.info(f"deliver_input: queue size after={_input_queue.qsize()}")
 
     # ── State helpers ─────────────────────────────────────────────────────────
 
@@ -198,10 +200,20 @@ class BismuthAgent:
         self.write_state(state)
 
         self.emit_message("gate", f"⏸ **Input Required**\n\n{prompt}")
+        log.info(f"pause_for_input: waiting on queue (queue size: {_input_queue.qsize()})")
 
-        # Block until user responds
-        response = _input_queue.get(block=True)
+        # Poll with a short timeout so the greenlet yields to the eventlet hub
+        # on each iteration — guarantees socket events (chat_message) can be
+        # processed even if monkey_patch is not in effect.
+        while True:
+            try:
+                response = _input_queue.get(timeout=1.0)
+                break
+            except queue.Empty:
+                time.sleep(0)   # yield to eventlet hub
+                continue
 
+        log.info(f"pause_for_input: received response '{response[:80]}'")
         state = self.read_state()
         state["awaiting_input"] = False
         state["input_prompt"] = None
