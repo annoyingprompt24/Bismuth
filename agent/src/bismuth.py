@@ -1021,23 +1021,29 @@ For each DoD criterion, assess if it has been met. Return JSON:
                 errors.append(f"File reported written but does not exist: {filename}")
                 continue
 
-            # JS syntax check via node --check
+            # JS syntax check via node --check (skipped if node not installed in agent container)
             if filename.endswith(".js"):
-                result = subprocess.run(
-                    ["node", "--check", str(filepath)],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    errors.append(f"Syntax error in {filename}: {result.stderr.strip()}")
+                try:
+                    result = subprocess.run(
+                        ["node", "--check", str(filepath)],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode != 0:
+                        errors.append(f"Syntax error in {filename}: {result.stderr.strip()}")
+                except FileNotFoundError:
+                    pass  # node not available in this environment
 
             # Python syntax check via py_compile
             if filename.endswith(".py"):
-                result = subprocess.run(
-                    ["python", "-m", "py_compile", str(filepath)],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    errors.append(f"Syntax error in {filename}: {result.stderr.strip()}")
+                try:
+                    result = subprocess.run(
+                        ["python", "-m", "py_compile", str(filepath)],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode != 0:
+                        errors.append(f"Syntax error in {filename}: {result.stderr.strip()}")
+                except FileNotFoundError:
+                    pass  # python not on PATH in this environment
 
             # HTML — check that referenced script/link files exist
             if filename.endswith(".html"):
