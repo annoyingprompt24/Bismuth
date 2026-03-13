@@ -224,10 +224,15 @@ def projects_new():
     STATE_PATH.mkdir(parents=True, exist_ok=True)
     (STATE_PATH / "project.yaml").write_text(data["yaml_content"])
 
-    # Clear workspace for fresh project
+    # Clear workspace contents but keep the directory (it's a volume mount point)
     if WORKSPACE.exists():
-        shutil.rmtree(WORKSPACE)
-    WORKSPACE.mkdir(parents=True, exist_ok=True)
+        for item in os.scandir(WORKSPACE):
+            if item.is_dir():
+                shutil.rmtree(item.path)
+            else:
+                os.remove(item.path)
+    else:
+        WORKSPACE.mkdir(parents=True, exist_ok=True)
 
     # Set fresh active state
     state = {
