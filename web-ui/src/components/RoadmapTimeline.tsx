@@ -32,12 +32,14 @@ const STATUS_BG: Record<string, string> = {
 export default function RoadmapTimeline({
   roadmap,
   state,
+  agentUrl,
   onAcceptRoadmap,
   onAcceptSprints,
   onResume,
 }: {
   roadmap: any
   state: AgentState | null
+  agentUrl: string | null
   onAcceptRoadmap: () => void
   onAcceptSprints: () => void
   onResume: () => void
@@ -193,6 +195,17 @@ export default function RoadmapTimeline({
             </div>
             <div className="text-bismuth-dim text-xs">Pending</div>
           </div>
+        </div>
+      )}
+
+      {/* Prominent export button on completion */}
+      {phase === 'complete' && agentUrl && (
+        <div className="mt-4 p-3 bg-bismuth-green/10 border border-bismuth-green/30 rounded-lg">
+          <div className="text-bismuth-green text-xs mb-2 font-medium">🎉 Project Complete</div>
+          <a href={`${agentUrl}/project/export`}
+            className="flex items-center justify-center gap-2 w-full bg-bismuth-green/20 border border-bismuth-green/40 text-bismuth-green rounded px-3 py-2 text-xs font-medium hover:bg-bismuth-green/30 transition-colors">
+            ⬇ Export Project
+          </a>
         </div>
       )}
     </div>

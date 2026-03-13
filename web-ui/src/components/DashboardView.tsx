@@ -11,7 +11,7 @@ export default function DashboardView() {
   return (
     <div className="h-screen flex flex-col bg-bismuth-bg overflow-hidden">
       {/* Top status bar */}
-      <StatusBar state={socket.state} connected={socket.connected} />
+      <StatusBar state={socket.state} connected={socket.connected} agentUrl={socket.agentUrl} />
 
       {/* Main split layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -21,6 +21,7 @@ export default function DashboardView() {
           <RoadmapTimeline
             roadmap={socket.roadmap}
             state={socket.state}
+            agentUrl={socket.agentUrl}
             onAcceptRoadmap={socket.acceptRoadmap}
             onAcceptSprints={socket.acceptSprints}
             onResume={socket.sendResume}

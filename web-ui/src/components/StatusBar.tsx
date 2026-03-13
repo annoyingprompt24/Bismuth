@@ -21,7 +21,7 @@ const PHASE_LABELS: Record<string, string> = {
   error:                    'Error',
 }
 
-export default function StatusBar({ state, connected }: { state: AgentState | null, connected: boolean }) {
+export default function StatusBar({ state, connected, agentUrl }: { state: AgentState | null, connected: boolean, agentUrl: string | null }) {
   const status = state?.status || 'grey'
   const config = STATUS_CONFIG[status]
 
@@ -64,6 +64,13 @@ export default function StatusBar({ state, connected }: { state: AgentState | nu
               <span className="text-bismuth-dim text-xs">{config.label}</span>
             </div>
           </>
+        )}
+
+        {state?.project && agentUrl && (
+          <a href={`${agentUrl}/project/export`}
+            className="text-xs px-2.5 py-1 border border-bismuth-border text-bismuth-dim rounded hover:border-bismuth-accent hover:text-bismuth-text transition-colors font-mono">
+            ⬇ Export
+          </a>
         )}
 
         <div className="flex items-center gap-1.5">

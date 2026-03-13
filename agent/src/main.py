@@ -7,7 +7,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -95,6 +95,29 @@ def agent_status():
 @app.route("/state", methods=["GET"])
 def get_state():
     return jsonify(read_state())
+
+@app.route("/project/export", methods=["GET"])
+def export_project():
+    import zipfile, io
+    state = read_state()
+    project_name = (state.get("project") or "project").replace(" ", "-").lower()
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(WORKSPACE):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for file in files:
+                full_path = os.path.join(root, file)
+                arcname = os.path.relpath(full_path, WORKSPACE)
+                zf.write(full_path, arcname)
+    buf.seek(0)
+
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{project_name}-bismuth-export.zip",
+    )
 
 @app.route("/roadmap", methods=["GET"])
 def get_roadmap():
