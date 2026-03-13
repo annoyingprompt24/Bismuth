@@ -11,7 +11,7 @@ version: '3.9'
 # All other configuration is handled via the UI at first run.
 # ─────────────────────────────────────────────────────────────────────────────
 
-x-github-user: &github-user annoyingprompt24
+x-github-user: &github-user YOUR_GITHUB_USERNAME
 x-github-repo: &github-repo bismuth
 x-github-branch: &github-branch main
 
@@ -25,8 +25,8 @@ services:
       context: https://github.com/annoyingprompt24/Bismuth.git#main:web-ui
       dockerfile: Dockerfile
     container_name: bismuth-ui
-    expose:
-      - "3000"
+    ports:
+      - "3067:3000"
     environment:
       - NODE_ENV=production
       - AGENT_API_URL=http://bismuth-agent:5000
